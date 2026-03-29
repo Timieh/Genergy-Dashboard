@@ -2066,7 +2066,7 @@ class SigenergySettingsCard extends HTMLElement {
               const l1Guess = baseL2.replace(/_l2/g, '_l1').replace(/phase_2/g, 'phase_1').replace(/phase_b/g, 'phase_a');
               const l3Guess = baseL2.replace(/_l2/g, '_l3').replace(/phase_2/g, 'phase_3').replace(/phase_b/g, 'phase_c');
               if (this._hass.states[l1Guess]) {
-                cfg2.entities.grid_voltage_l1 = l1Guess;
+                cfg2.entities.grid_voltage = l1Guess;
                 found.push('Grid Voltage L1: ' + l1Guess);
               }
               cfg2.entities.grid_voltage_l2 = baseL2;
@@ -2543,6 +2543,25 @@ class SigenergySettingsCard extends HTMLElement {
           const origEntity = cfg2.entities[cfgKey];
           cfg2.entities[cfgKey] = result.dailyEntity;
           found.push('⚡ ' + meterName + ': created daily helper (' + origEntity + ' → ' + result.dailyEntity + ')');
+        }
+      }
+    }
+    // Also handle dual tariff entities — ensure they point to daily helpers, not cumulative lifetime sensors
+    if (cfg2.features.dual_tariff) {
+      const dualKeys = [
+        ['grid_import_high_tariff', 'grid_import_high'],
+        ['grid_import_low_tariff', 'grid_import_low'],
+        ['grid_export_high_tariff', 'grid_export_high'],
+        ['grid_export_low_tariff', 'grid_export_low'],
+      ];
+      for (const [cfgKey, meterName] of dualKeys) {
+        if (cfg2.entities[cfgKey] && cfg2.entities[cfgKey] !== 'sensor.entity_id') {
+          const result = await this._ensureDailyMeter(cfg2.entities[cfgKey], meterName);
+          if (result.isCumulative) {
+            const origEntity = cfg2.entities[cfgKey];
+            cfg2.entities[cfgKey] = result.dailyEntity;
+            found.push('⚡ ' + meterName + ': converted lifetime → daily (' + origEntity + ' → ' + result.dailyEntity + ')');
+          }
         }
       }
     }
@@ -3560,6 +3579,31 @@ return forecast.map(function(d) {
     const cfg = store.get();
     const e = cfg.entities || {};
     const f = cfg.features || {};
+
+    // Runtime check: if dual tariff entities are still cumulative (not daily helpers),
+    // try to find existing daily helpers or run _ensureDailyMeter to create them
+    if (f.dual_tariff) {
+      const dualKeys = [
+        ['grid_import_high_tariff', 'grid_import_high'],
+        ['grid_import_low_tariff', 'grid_import_low'],
+        ['grid_export_high_tariff', 'grid_export_high'],
+        ['grid_export_low_tariff', 'grid_export_low'],
+      ];
+      let changed = false;
+      for (const [cfgKey, meterName] of dualKeys) {
+        if (e[cfgKey] && e[cfgKey] !== 'sensor.entity_id') {
+          const result = await this._ensureDailyMeter(e[cfgKey], meterName);
+          if (result.isCumulative && result.dailyEntity !== e[cfgKey]) {
+            e[cfgKey] = result.dailyEntity;
+            cfg.entities[cfgKey] = result.dailyEntity;
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        store.save(cfg);
+      }
+    }
 
     try {
       const config = await this._hass.callWS({ type: 'lovelace/config', url_path: 'dashboard-sigenergy' });

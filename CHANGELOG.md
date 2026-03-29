@@ -2,6 +2,12 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.13.6] - 2025-07-15
+
+### Fixed
+- **L1/L2/L3 Voltage Auto-Detect** — When a 3-phase grid voltage entity was detected via L2, auto-detect wrote L1 to the non-existent config key `grid_voltage_l1` instead of `grid_voltage`. L1 voltage was silently lost and the Genergy House Card showed no grid voltage. Now correctly writes to `grid_voltage`
+- **Dual Tariff Daily Helper Enforcement** — The v2.13.5 auto-detect fix only ran during Settings → Auto-Detect. If a user rebuilt the dashboard without re-running auto-detect, the sankey/mushroom cards could still receive cumulative lifetime tariff entities. Added a runtime guard in `_buildDashboard` that checks tariff entities on every dashboard rebuild and transparently converts any remaining cumulative sensors to daily utility meter helpers
+
 ## [2.13.5] - 2025-07-15
 
 ### Fixed
