@@ -2,6 +2,16 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.13.5] - 2025-07-15
+
+### Fixed
+- **Dual Tariff Sankey/Mushroom Showing Cumulative Values** — When dual tariff metering was enabled with genergy daily helpers (high/low), the sankey chart and mushroom stat cards displayed lifetime cumulative grid values (e.g. 8,616 kWh) instead of daily sums. Root cause: auto-detect overwrote `grid_import_today` with the first cumulative tariff entity from HA energy preferences, even when dual tariff was already enabled
+  - Auto-detect now skips grid entity assignment from HA energy prefs when `dual_tariff` is on (steps 1–3 of `_autoDetectDailyEnergy`)
+  - Sankey chart uses `add_entities` to sum high + low tariff into a single Grid node (both import source and export destination)
+  - Mushroom stat cards use Jinja templates to sum high + low tariff for Imported/Exported display
+  - Jinja CSS variables (`grid_i`/`grid_e`) sum both tariff entities for self-sufficiency percentage calculations
+  - Edge cases: handles mixed scenarios (e.g. import has 2 tariffs, export has 1) via separate dual-import/dual-export flags
+
 ## [2.13.4] - 2025-07-15
 
 ### Fixed
