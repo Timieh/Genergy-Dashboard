@@ -3950,17 +3950,23 @@ return forecast.map(function(d) {
         sankeyDest.push(exportNode);
       }
 
-      // Build source children arrays — order determines greedy allocation priority in ha-sankey-chart.
-      // Priority: house load > EV > HP > battery charge > grid export (surplus).
-      // This ensures consumption gets flow before export, preventing orphaned destinations.
+      // Build source children arrays — sources can flow to all destinations
       const _gridExportChild = _gridExportId || e.grid_export_today;
-      const _loadChildren = [e.load_energy_today];
-      if (f.show_ev_in_sankey && evSankeyEntity) _loadChildren.push(evSankeyEntity);
-      if (f.show_hp_in_sankey && hpSankeyEntity) _loadChildren.push(hpSankeyEntity);
+      const battDischargeChildren = [_gridExportChild, e.load_energy_today].filter(Boolean);
+      const solarChildren = [e.battery_charge_today, _gridExportChild, e.load_energy_today].filter(Boolean);
+      const gridImportChildren = [e.battery_charge_today, e.load_energy_today].filter(Boolean);
 
-      const battDischargeChildren = [..._loadChildren, _gridExportChild].filter(Boolean);
-      const solarChildren = [..._loadChildren, e.battery_charge_today, _gridExportChild].filter(Boolean);
-      const gridImportChildren = [..._loadChildren, e.battery_charge_today].filter(Boolean);
+      // Add EV/HP as potential children of all sources (energy can flow from any source)
+      if (f.show_ev_in_sankey && evSankeyEntity) {
+        battDischargeChildren.push(evSankeyEntity);
+        solarChildren.push(evSankeyEntity);
+        gridImportChildren.push(evSankeyEntity);
+      }
+      if (f.show_hp_in_sankey && hpSankeyEntity) {
+        battDischargeChildren.push(hpSankeyEntity);
+        solarChildren.push(hpSankeyEntity);
+        gridImportChildren.push(hpSankeyEntity);
+      }
 
       // Grid import source — dual tariff uses add_entities to sum high+low, fallback to grid_import_today
       const _hasDualImport = f.dual_tariff && (e.grid_import_high_tariff || e.grid_import_low_tariff);
@@ -3968,7 +3974,7 @@ return forecast.map(function(d) {
       const _gridImportAdd = (_hasDualImport && e.grid_import_high_tariff && e.grid_import_low_tariff)
         ? [e.grid_import_high_tariff === _gridImportId ? e.grid_import_low_tariff : e.grid_import_high_tariff]
         : undefined;
-      const gridImportNode = { entity_id: _gridImportId, name: 'Grid', color: '#6b7fd4', children: gridImportChildren, children_sum: { should_be: 'equal_or_less', reconcile_to: 'max' } };
+      const gridImportNode = { entity_id: _gridImportId, name: 'Grid', color: '#6b7fd4', children: gridImportChildren };
       if (_gridImportAdd) gridImportNode.add_entities = _gridImportAdd;
 
       const sankeyChart = {
@@ -3976,9 +3982,8 @@ return forecast.map(function(d) {
         layout: 'horizontal',
         show_names: true, show_states: true, show_units: true, show_icons: false,
         round: 1, height: 480, wide: true,
-        min_box_size: 30, min_box_distance: 5, unit_prefix: 'k',
-        min_state: 0.1,
-        throttle: 2000,
+        min_box_size: 50, min_box_distance: 8, unit_prefix: 'k',
+        min_state: 0.01,
         energy_date_selection: false,
         sections: [
           {
@@ -3987,8 +3992,8 @@ return forecast.map(function(d) {
             // flow lines even when larger sources would otherwise consume all destinations.
             entities: [
               gridImportNode,
-              { entity_id: e.battery_discharge_today, name: 'Battery', color: '#00d4b8', children: battDischargeChildren, children_sum: { should_be: 'equal_or_less', reconcile_to: 'max' } },
-              { entity_id: e.solar_energy_today, name: 'Solar', color: '#c8b84a', children: solarChildren, children_sum: { should_be: 'equal_or_less', reconcile_to: 'max' } }
+              { entity_id: e.battery_discharge_today, name: 'Battery', color: '#00d4b8', children: battDischargeChildren },
+              { entity_id: e.solar_energy_today, name: 'Solar', color: '#c8b84a', children: solarChildren }
             ].filter(x => x.entity_id)
           },
           {
