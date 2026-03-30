@@ -2,6 +2,13 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.13.8] - 2026-03-30
+
+### Fixed
+- **Sankey Grid Destination Bar Jumping** — Added `throttle: 2000` (2s debounce) to limit chart re-renders when entity values fluctuate. Reduced `min_box_size` from 50 → 30 and `min_box_distance` from 8 → 5 so boxes scale more proportionally and small-value destinations don't dominate the layout. Prevents the Grid export bar from visually jumping up and down as its value changes
+- **Sankey HP/EV "No Source" Orphaned Destinations** — Reordered source children allocation priority from `[grid_export, load, ...ev, ...hp]` to `[load, ev, hp, battery_charge, grid_export]`. Ha-sankey-chart uses greedy allocation where the first child in the list claims source flow first. Previously, grid export consumed source energy before house load/EV/HP, leaving small consumers like HP (0.04 kWh) orphaned with no connecting flow line. Now consumption destinations get priority, grid export gets surplus
+- **Sankey Source/Destination Mismatch Reconciliation** — Added `children_sum: { should_be: 'equal_or_less', reconcile_to: 'max' }` to all source nodes (Grid Import, Battery Discharge, Solar). When independently-measured destination totals exceed source totals (common with separate energy sensors), ha-sankey-chart now scales sources up rather than leaving destinations disconnected
+
 ## [2.13.7] - 2026-03-30
 
 ### Fixed
