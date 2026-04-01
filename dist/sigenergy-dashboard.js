@@ -4084,8 +4084,8 @@ return forecast.map(function(d) {
             if (hSoc) tpl += "{%- for p in _soc_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.soc = dict(ns.soc, **{ts: (p.value) | round(0)}) %}{%- endfor %}\n";
             // Header
             tpl += "\n| Time |";
-            if (hImpP) tpl += " Buy ¢ |";
-            if (hExpP) tpl += " Sell ¢ |";
+            if (hImpP) tpl += " Buy " + currency + " |";
+            if (hExpP) tpl += " Sell " + currency + " |";
             if (hSolar) tpl += " PV kW |";
             if (hLoad) tpl += " Load kW |";
             if (hGrid) tpl += " Grid kW |";
@@ -4120,14 +4120,15 @@ return forecast.map(function(d) {
             for (let i = 1; i < haeCols; i++) tpl += " |";
             tpl += "\n{%- endif %}\n";
             tpl += "{%- set t = ts | timestamp_custom('%H:%M') %}\n";
-            tpl += "| {{ t }} |";
+            tpl += "{%- set _isNow = (ts | int - now().timestamp() | int) | abs < 900 %}\n";
+            tpl += "| {{ '**▶ ' + t + '**' if _isNow else t }} |";
             if (hImpP) tpl += " <font color='red'>{{ ns.imp.get(ts|string, '—') }}</font> |";
             if (hExpP) tpl += " <font color='green'>{{ ns.exp.get(ts|string, '—') }}</font> |";
-            if (hSolar) tpl += " {{ ns.solar.get(ts|string, '—') }} |";
+            if (hSolar) tpl += " {%- set _s = ns.solar.get(ts|string) %}{{ _s if _s and _s != 0 else '<font color=grey>0</font>' if _s == 0 else '—' }} |";
             if (hLoad) tpl += " {{ ns.load.get(ts|string, '—') }} |";
             if (hGrid) tpl += " {%- set _g = ns.grid.get(ts|string) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
             if (hBatt) tpl += " {{ ns.batt.get(ts|string, '—') }} |";
-            if (hSoc) tpl += " {{ ns.soc.get(ts|string, '—') }} |";
+            if (hSoc) tpl += " {{ ns.soc.get(ts|string, '—') }}% |";
             tpl += "\n{%- endfor %}\n";
 
             forecastTableCard = {
@@ -4200,14 +4201,15 @@ return forecast.map(function(d) {
             for (let i = 1; i < emCols; i++) tpl += " |";
             tpl += "\n{%- endif %}\n";
             tpl += "{%- set t = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%H:%M') %}\n";
-            tpl += "| {{ t }} |";
+            tpl += "{%- set _isNow = (dt | as_datetime | as_local | as_timestamp | int - now().timestamp() | int) | abs < 900 %}\n";
+            tpl += "| {{ '**▶ ' + t + '**' if _isNow else t }} |";
             if (bpEnt) tpl += " <font color='red'>{{ ns.buy.get(dt, '—') }}</font> |";
             if (spEnt) tpl += " <font color='green'>{{ ns.sell.get(dt, '—') }}</font> |";
-            if (mpPv) tpl += " {{ ns.pv.get(dt, '—') }} |";
+            if (mpPv) tpl += " {%- set _pv = ns.pv.get(dt) %}{{ _pv if _pv and _pv != 0 else '<font color=grey>0</font>' if _pv == 0 else '—' }} |";
             if (mpLoad) tpl += " {{ ns.load.get(dt, '—') }} |";
             if (mpGrid) tpl += " {%- set _g = ns.grid.get(dt) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
             if (mpBatt) tpl += " {{ ns.batt.get(dt, '—') }} |";
-            if (mpSoc) tpl += " {{ ns.soc.get(dt, '—') }} |";
+            if (mpSoc) tpl += " {{ ns.soc.get(dt, '—') }}% |";
             tpl += "\n{%- endfor %}\n";
 
             forecastTableCard = {
