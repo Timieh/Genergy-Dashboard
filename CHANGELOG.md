@@ -8,11 +8,12 @@ All notable changes to the Genergy Dashboard are documented here.
 - **EMHASS Forecast Table Data** — Fixed empty table caused by each MPC entity storing forecasts in separate attributes. Rewrote template to use time-keyed lookups across `sensor.mpc_pv_power`, `sensor.mpc_grid_power`, `sensor.mpc_load_power`, `sensor.mpc_batt_power`, and `sensor.mpc_batt_soc` independently
 - **String-to-Float Conversion** — All EMHASS forecast values are strings; added `| float(0)` conversion before arithmetic operations
 - **Table Rendering** — Removed `<details>` HTML wrapper that broke markdown table parsing; tables now render as proper HTML tables
+- **Buy/Sell Prices Per Timeslot** — EMHASS buy/sell prices now use `unit_load_cost_forecasts` and `unit_prod_price_forecasts` attributes for per-timeslot price forecasts instead of static current state values
 
 ### Added
 - **Collapsible Toggle** — Mushroom tap-to-toggle header card above forecast table using `input_boolean.genergy_forecast_table` + conditional card
 - **Colored Values** — Buy prices in red, sell prices in green, grid values color-coded by direction (green=export, red=import, grey=zero)
-- **Column Units** — Headers now show "PV kW", "Load kW", "Grid kW", "Batt kW", "SoC %", "Buy ¢", "Sell ¢"
+- **Column Units** — Headers now show "PV kW", "Load kW", "Grid kW", "Batt kW", "SoC %", "Buy €", "Sell €" (with configured currency)
 
 ### Changed
 - **Scrollable Table Content** — Table content scrolls independently within a 400px max-height container with sticky column headers

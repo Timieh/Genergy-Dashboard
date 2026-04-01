@@ -4138,17 +4138,19 @@ return forecast.map(function(d) {
             // Load each entity's forecast into a time-keyed dict
             // PV forecasts (primary iterator)
             tpl += "{%- set _iter = state_attr('" + iterEnt + "', 'forecasts') or state_attr('" + iterEnt + "', 'battery_scheduled_power') or [] %}\n";
-            tpl += "{%- set ns = namespace(pv={}, grid={}, load={}, batt={}, soc={}) %}\n";
+            tpl += "{%- set ns = namespace(pv={}, grid={}, load={}, batt={}, soc={}, buy={}, sell={}) %}\n";
             // Build time-keyed lookups for each entity
             if (mpPv) tpl += "{%- for p in (state_attr('" + mpPv + "', 'forecasts') or []) %}{%- set ns.pv = dict(ns.pv, **{p.date: ((p.mpc_pv_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
             if (mpGrid) tpl += "{%- for p in (state_attr('" + mpGrid + "', 'forecasts') or []) %}{%- set ns.grid = dict(ns.grid, **{p.date: ((p.mpc_grid_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
             if (mpLoad) tpl += "{%- for p in (state_attr('" + mpLoad + "', 'forecasts') or []) %}{%- set ns.load = dict(ns.load, **{p.date: ((p.mpc_load_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
             if (mpBatt) tpl += "{%- for p in (state_attr('" + mpBatt + "', 'battery_scheduled_power') or []) %}{%- set ns.batt = dict(ns.batt, **{p.date: ((p.mpc_batt_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
             if (mpSoc) tpl += "{%- for p in (state_attr('" + mpSoc + "', 'battery_scheduled_soc') or []) %}{%- set ns.soc = dict(ns.soc, **{p.date: (p.mpc_batt_soc | float(0)) | round(0)}) %}{%- endfor %}\n";
+            if (bpEnt) tpl += "{%- for p in (state_attr('" + bpEnt + "', 'unit_load_cost_forecasts') or []) %}{%- set ns.buy = dict(ns.buy, **{p.date: (p.mpc_general_price | float(0)) | round(4)}) %}{%- endfor %}\n";
+            if (spEnt) tpl += "{%- for p in (state_attr('" + spEnt + "', 'unit_prod_price_forecasts') or []) %}{%- set ns.sell = dict(ns.sell, **{p.date: (p.mpc_feed_in_price | float(0)) | round(4)}) %}{%- endfor %}\n";
             // Header
             tpl += "\n| Time |";
-            if (bpEnt) tpl += " Buy |";
-            if (spEnt) tpl += " Sell |";
+            if (bpEnt) tpl += " Buy " + currency + " |";
+            if (spEnt) tpl += " Sell " + currency + " |";
             if (mpPv) tpl += " PV kW |";
             if (mpLoad) tpl += " Load kW |";
             if (mpGrid) tpl += " Grid kW |";
@@ -4169,8 +4171,8 @@ return forecast.map(function(d) {
             tpl += "{%- set dt = row.date %}\n";
             tpl += "{%- set t = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%H:%M') %}\n";
             tpl += "| {{ t }} |";
-            if (bpEnt) tpl += " <font color='red'>{{ states('" + bpEnt + "') | float(0) | round(1) }}</font> |";
-            if (spEnt) tpl += " <font color='green'>{{ states('" + spEnt + "') | float(0) | round(1) }}</font> |";
+            if (bpEnt) tpl += " <font color='red'>{{ ns.buy.get(dt, '—') }}</font> |";
+            if (spEnt) tpl += " <font color='green'>{{ ns.sell.get(dt, '—') }}</font> |";
             if (mpPv) tpl += " {{ ns.pv.get(dt, '—') }} |";
             if (mpLoad) tpl += " {{ ns.load.get(dt, '—') }} |";
             if (mpGrid) tpl += " {%- set _g = ns.grid.get(dt) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
