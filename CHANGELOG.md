@@ -7,9 +7,14 @@ All notable changes to the Genergy Dashboard are documented here.
 ### Fixed
 - **EMHASS Forecast Table Data** — Fixed empty table caused by each MPC entity storing forecasts in separate attributes. Rewrote template to use time-keyed lookups across `sensor.mpc_pv_power`, `sensor.mpc_grid_power`, `sensor.mpc_load_power`, `sensor.mpc_batt_power`, and `sensor.mpc_batt_soc` independently
 - **String-to-Float Conversion** — All EMHASS forecast values are strings; added `| float(0)` conversion before arithmetic operations
+- **Table Rendering** — Removed `<details>` HTML wrapper that broke markdown table parsing; tables now render as proper HTML tables
+
+### Added
+- **Collapsible Toggle** — Mushroom tap-to-toggle header card above forecast table using `input_boolean.genergy_forecast_table` + conditional card
+- **Colored Values** — Buy prices in red, sell prices in green, grid values color-coded by direction (green=export, red=import, grey=zero)
+- **Column Units** — Headers now show "PV kW", "Load kW", "Grid kW", "Batt kW", "SoC %", "Buy ¢", "Sell ¢"
 
 ### Changed
-- **Collapsible Forecast Table** — Forecast table (both HAEO and EMHASS) is now wrapped in a `<details>` element with a clickable header. Click the arrow/title to collapse or expand the table
 - **Scrollable Table Content** — Table content scrolls independently within a 400px max-height container with sticky column headers
 
 ## [2.17.0] - 2026-04-02
