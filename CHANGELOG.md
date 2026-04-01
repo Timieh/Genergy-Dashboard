@@ -2,6 +2,14 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.17.0] - 2026-04-02
+
+### Added
+- **Forecast Timeline Table** — New scrollable markdown card that displays upcoming EMS forecast data in tabular form. Shows Time, Buy/Sell prices, PV, Load, Grid, Battery, and SoC columns. Supports both HAEO (via `forecast` attributes) and EMHASS (via MPC `forecasts`/`battery_scheduled_power`/`battery_scheduled_soc` attributes). Theme-aware styling with sticky headers and scrollable content area
+- **Forecast Table Toggle** — New "Forecast Table" toggle in Features → Energy Management (EMS) section for both EMHASS and HAEO providers
+- **HAEO Price Entities** — Added `haeo_import_price` and `haeo_export_price` entity fields for HAEO price forecast sources (e.g., `number.grid_import_price`). Auto-detected during HAEO detection
+- **HAEO Price Auto-Detect** — Both "Detect All" and section-level HAEO detection now find `number.*import_price` and `number.*export_price` entities automatically
+
 ## [2.16.1] - 2026-04-02
 
 ### Added

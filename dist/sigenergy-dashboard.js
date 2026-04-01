@@ -139,6 +139,8 @@ const DEFAULT_ENTITIES = {
   haeo_optim_status: '',
   haeo_optim_cost: '',
   haeo_optim_duration: '',
+  haeo_import_price: '',
+  haeo_export_price: '',
   // EV / Heat Pump daily energy (for Sankey)
   ev_energy_today: '',
   heat_pump_energy_today: '',
@@ -161,6 +163,7 @@ const DEFAULT_CONFIG = {
     deferrable_loads: false,
     ems_provider: 'none',
     haeo_forecasts: true,
+    forecast_table: false,
     financial_tracking: false,
     solar_forecast: false,
     weather_widget: true,
@@ -1212,6 +1215,11 @@ class SigenergySettingsCard extends HTMLElement {
             <div class="toggle-desc" style="margin-bottom:4px;color:#8892a4;font-size:10px;">Live electricity prices for chart overlays (shared with EMHASS)</div>
             ${this._entityRow('Import Price', 'current_import_price', e)}
             ${this._entityRow('Export Price', 'current_export_price', e)}
+            <div class="toggle-desc" style="margin-top:6px;margin-bottom:4px;color:#8892a4;font-size:10px;">HAEO price forecast entities — with <code>forecast</code> attribute for timeline table</div>
+            ${this._entityRow('Import Price Forecast', 'haeo_import_price', e)}
+            <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">number.grid_import_price — includes forecast attribute with future import prices</div>
+            ${this._entityRow('Export Price Forecast', 'haeo_export_price', e)}
+            <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">number.grid_export_price — includes forecast attribute with future export prices</div>
           </div>
         ` : ''}
       </div>
@@ -2209,6 +2217,11 @@ class SigenergySettingsCard extends HTMLElement {
               if (haeoGridKeys.length > 0 && !cfg2.entities.haeo_grid_power) { cfg2.entities.haeo_grid_power = haeoGridKeys[0]; found.push('HAEO grid: ' + haeoGridKeys[0]); }
               if (haeoSolarKeys.length > 0 && !cfg2.entities.haeo_solar_power) { cfg2.entities.haeo_solar_power = haeoSolarKeys[0]; found.push('HAEO solar: ' + haeoSolarKeys[0]); }
               if (haeoLoadKeys.length > 0 && !cfg2.entities.haeo_load_power) { cfg2.entities.haeo_load_power = haeoLoadKeys[0]; found.push('HAEO load: ' + haeoLoadKeys[0]); }
+              // Find HAEO price entities (number domain)
+              const haeoImpPrice = allKeys.filter(k => k.startsWith('number.') && (k.includes('grid_import_price') || k.includes('import_price')));
+              const haeoExpPrice = allKeys.filter(k => k.startsWith('number.') && (k.includes('grid_export_price') || k.includes('export_price')));
+              if (haeoImpPrice.length > 0 && !cfg2.entities.haeo_import_price) { cfg2.entities.haeo_import_price = haeoImpPrice[0]; found.push('HAEO import price: ' + haeoImpPrice[0]); }
+              if (haeoExpPrice.length > 0 && !cfg2.entities.haeo_export_price) { cfg2.entities.haeo_export_price = haeoExpPrice[0]; found.push('HAEO export price: ' + haeoExpPrice[0]); }
               // Auto-enable HAEO as EMS provider
               cfg2.features.ems_provider = 'haeo';
               cfg2.features.haeo_forecasts = true;
@@ -2726,6 +2739,17 @@ class SigenergySettingsCard extends HTMLElement {
       ], { domainFilter: 'sensor' });
       this._assignCandidate('haeo_load_power', loadC, cfg2, found);
 
+      // HAEO price entities — number.grid_import_price / number.grid_export_price
+      const impPriceC = this._findEntityCandidates(allKeys, [
+        (k) => k.includes('grid_import_price') || k.includes('import_price'),
+      ], { domainFilter: 'number' });
+      this._assignCandidate('haeo_import_price', impPriceC, cfg2, found);
+
+      const expPriceC = this._findEntityCandidates(allKeys, [
+        (k) => k.includes('grid_export_price') || k.includes('export_price'),
+      ], { domainFilter: 'number' });
+      this._assignCandidate('haeo_export_price', expPriceC, cfg2, found);
+
       cfg2.features.ems_provider = 'haeo'; cfg2.features.haeo_forecasts = true;
       found.push('✓ HAEO detected');
     }
@@ -2849,10 +2873,12 @@ class SigenergySettingsCard extends HTMLElement {
         ${emsProvider === 'emhass' ? `
           ${this._toggleHtml('EMHASS Forecasts', 'Overlay MPC forecast series (PV/Battery/Grid/Load) on energy charts', 'emhass_forecasts', f.emhass_forecasts)}
           ${this._toggleHtml('Deferrable Loads', 'Show heat pump/boiler schedule forecasts from EMHASS', 'deferrable_loads', f.deferrable_loads)}
+          ${this._toggleHtml('Forecast Table', 'Show a tabular timeline of upcoming forecast data (PV/Battery/Grid/Load/SoC/Prices)', 'forecast_table', f.forecast_table)}
           ${this._toggleHtml('Financial Tracking', 'Show cost/savings cards and chart annotations', 'financial_tracking', f.financial_tracking)}
         ` : ''}
         ${emsProvider === 'haeo' ? `
           ${this._toggleHtml('HAEO Forecasts', 'Overlay HAEO optimization schedule on energy charts (via forecast attributes)', 'haeo_forecasts', f.haeo_forecasts)}
+          ${this._toggleHtml('Forecast Table', 'Show a tabular timeline of upcoming forecast data (PV/Battery/Grid/Load/SoC/Prices)', 'forecast_table', f.forecast_table)}
           ${this._toggleHtml('Financial Tracking', 'Show optimization cost in chart annotations', 'financial_tracking', f.financial_tracking)}
         ` : ''}
       </div>
@@ -4009,6 +4035,149 @@ return forecast.map(function(d) {
       houseCardOrig.card_mod.style = 'ha-card { overflow: hidden !important; }\n.house-container { width: 100% !important; overflow: hidden !important; }\n.house-container img { width: 100% !important; height: auto !important; }\n.house-container svg { width: 100% !important; height: auto !important; }';
       const houseStack = [houseCardOrig];
       if (emsStatusCard) houseStack.push(emsStatusCard);
+
+      // Build Forecast Timeline Table (conditional on forecast_table feature)
+      let forecastTableCard = null;
+      if (f.forecast_table && emsP !== 'none') {
+        const currency = cfg.display?.currency || '€';
+        const _ft = _resolvedTheme;
+        const _ftBg = _ft === 'light' ? '#f8f9fa' : 'rgba(30,35,54,0.94)';
+        const _ftBorder = _ft === 'light' ? '#e0e0e0' : '#2d3451';
+        const _ftText = _ft === 'light' ? '#1a1a2e' : '#e0e4ec';
+        const _ftMuted = _ft === 'light' ? '#666' : '#8892a4';
+        const _ftRowAlt = _ft === 'light' ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.03)';
+        const _ftNowBg = _ft === 'light' ? 'rgba(0,212,184,0.12)' : 'rgba(0,212,184,0.15)';
+
+        if (emsP === 'haeo') {
+          // HAEO forecast table — uses forecast attributes
+          const hImpP = e.haeo_import_price || '';
+          const hExpP = e.haeo_export_price || '';
+          const hBatt = e.haeo_battery_charge || e.haeo_battery_discharge || '';
+          const hGrid = e.haeo_grid_power || '';
+          const hSolar = e.haeo_solar_power || '';
+          const hLoad = e.haeo_load_power || '';
+          const hSoc = e.haeo_battery_soc || '';
+
+          // Build Jinja2 template — iterates over export price forecast or falls back
+          const iterEntity = hExpP || hImpP || hSolar || hLoad || hGrid || hBatt || hSoc;
+          if (iterEntity) {
+            let tpl = '';
+            // Collect all forecast arrays into time-keyed maps
+            tpl += "{%- set _iter = state_attr('" + iterEntity + "', 'forecast') or [] %}\n";
+            if (hImpP) tpl += "{%- set _imp_fc = state_attr('" + hImpP + "', 'forecast') or [] %}\n";
+            if (hExpP) tpl += "{%- set _exp_fc = state_attr('" + hExpP + "', 'forecast') or [] %}\n";
+            if (hBatt) tpl += "{%- set _batt_fc = state_attr('" + hBatt + "', 'forecast') or [] %}\n";
+            if (hGrid) tpl += "{%- set _grid_fc = state_attr('" + hGrid + "', 'forecast') or [] %}\n";
+            if (hSolar) tpl += "{%- set _solar_fc = state_attr('" + hSolar + "', 'forecast') or [] %}\n";
+            if (hLoad) tpl += "{%- set _load_fc = state_attr('" + hLoad + "', 'forecast') or [] %}\n";
+            if (hSoc) tpl += "{%- set _soc_fc = state_attr('" + hSoc + "', 'forecast') or [] %}\n";
+            // Build time-keyed lookup dicts
+            tpl += "{%- set ns = namespace(imp={}, exp={}, batt={}, grid={}, solar={}, load={}, soc={}) %}\n";
+            if (hImpP) tpl += "{%- for p in _imp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.imp = dict(ns.imp, **{ts: (p.value * 100) | round(1)}) %}{%- endfor %}\n";
+            if (hExpP) tpl += "{%- for p in _exp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.exp = dict(ns.exp, **{ts: (p.value * 100) | round(1)}) %}{%- endfor %}\n";
+            if (hBatt) tpl += "{%- for p in _batt_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.batt = dict(ns.batt, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
+            if (hGrid) tpl += "{%- for p in _grid_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.grid = dict(ns.grid, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
+            if (hSolar) tpl += "{%- for p in _solar_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.solar = dict(ns.solar, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
+            if (hLoad) tpl += "{%- for p in _load_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.load = dict(ns.load, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
+            if (hSoc) tpl += "{%- for p in _soc_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.soc = dict(ns.soc, **{ts: (p.value) | round(0)}) %}{%- endfor %}\n";
+            // Header
+            tpl += "| Time |";
+            if (hImpP) tpl += " Buy |";
+            if (hExpP) tpl += " Sell |";
+            if (hSolar) tpl += " PV |";
+            if (hLoad) tpl += " Load |";
+            if (hGrid) tpl += " Grid |";
+            if (hBatt) tpl += " Batt |";
+            if (hSoc) tpl += " SoC |";
+            tpl += "\n";
+            tpl += "|:---:|";
+            if (hImpP) tpl += ":---:|";
+            if (hExpP) tpl += ":---:|";
+            if (hSolar) tpl += ":---:|";
+            if (hLoad) tpl += ":---:|";
+            if (hGrid) tpl += ":---:|";
+            if (hBatt) tpl += ":---:|";
+            if (hSoc) tpl += ":---:|";
+            tpl += "\n";
+            // Data rows
+            tpl += "{%- for p in _iter %}\n";
+            tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
+            tpl += "{%- set t = ts | timestamp_custom('%H:%M') %}\n";
+            tpl += "| {{ t }} |";
+            if (hImpP) tpl += " {{ ns.imp.get(ts|string, '—') }} |";
+            if (hExpP) tpl += " {{ ns.exp.get(ts|string, '—') }} |";
+            if (hSolar) tpl += " {{ ns.solar.get(ts|string, '—') }} |";
+            if (hLoad) tpl += " {{ ns.load.get(ts|string, '—') }} |";
+            if (hGrid) tpl += " {{ ns.grid.get(ts|string, '—') }} |";
+            if (hBatt) tpl += " {{ ns.batt.get(ts|string, '—') }} |";
+            if (hSoc) tpl += " {{ ns.soc.get(ts|string, '—') }}% |";
+            tpl += "\n{%- endfor %}\n";
+
+            forecastTableCard = {
+              type: 'markdown',
+              title: '📊 HAEO Forecast Timeline',
+              content: tpl,
+              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { max-height: 400px; overflow-y: auto; font-size: 12px; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
+            };
+          }
+        } else if (emsP === 'emhass') {
+          // EMHASS forecast table — uses attributes from MPC entities
+          const mpPv = e.mpc_pv || '';
+          const mpBatt = e.mpc_battery || '';
+          const mpGrid = e.mpc_grid || '';
+          const mpLoad = e.mpc_load || '';
+          const mpSoc = e.mpc_soc || '';
+          const bpEnt = e.buy_price || '';
+          const spEnt = e.sell_price || '';
+
+          const iterEnt = mpPv || mpBatt || mpGrid || mpLoad || '';
+          if (iterEnt) {
+            let tpl = '';
+            // EMHASS uses attributes.forecasts with {date, mpc_*_power} structure
+            tpl += "{%- set _fc = state_attr('" + iterEnt + "', 'forecasts') or [] %}\n";
+            if (mpBatt) tpl += "{%- set _batt_fc = state_attr('" + mpBatt + "', 'battery_scheduled_power') or [] %}\n";
+            if (mpBatt) tpl += "{%- set ns_batt = namespace(d={}) %}\n{%- for p in _batt_fc %}{%- set ns_batt.d = dict(ns_batt.d, **{p.date: (p.mpc_batt_power / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpSoc) tpl += "{%- set _soc_fc = state_attr('" + mpSoc + "', 'battery_scheduled_soc') or [] %}\n";
+            if (mpSoc) tpl += "{%- set ns_soc = namespace(d={}) %}\n{%- for p in _soc_fc %}{%- set ns_soc.d = dict(ns_soc.d, **{p.date: p.mpc_batt_soc | round(0)}) %}{%- endfor %}\n";
+            // Header
+            tpl += "| Time |";
+            if (bpEnt) tpl += " Buy |";
+            if (spEnt) tpl += " Sell |";
+            tpl += " PV | Load | Grid |";
+            if (mpBatt) tpl += " Batt |";
+            if (mpSoc) tpl += " SoC |";
+            tpl += "\n";
+            tpl += "|:---:|";
+            if (bpEnt) tpl += ":---:|";
+            if (spEnt) tpl += ":---:|";
+            tpl += ":---:|:---:|:---:|";
+            if (mpBatt) tpl += ":---:|";
+            if (mpSoc) tpl += ":---:|";
+            tpl += "\n";
+            // Data rows — iterate over the MPC forecasts array
+            tpl += "{%- for row in _fc %}\n";
+            tpl += "{%- set t = row.date | as_datetime | as_local | as_timestamp | timestamp_custom('%H:%M') %}\n";
+            tpl += "| {{ t }} |";
+            if (bpEnt) tpl += " {{ states('" + bpEnt + "') | round(1) }} |";
+            if (spEnt) tpl += " {{ states('" + spEnt + "') | round(1) }} |";
+            tpl += " {{ (row.mpc_pv_power / 1000) | round(2) }} |";
+            tpl += " {{ (row.mpc_load_power / 1000) | round(2) }} |";
+            tpl += " {{ (row.mpc_grid_power / 1000) | round(2) }} |";
+            if (mpBatt) tpl += " {{ ns_batt.d.get(row.date, '—') }} |";
+            if (mpSoc) tpl += " {{ ns_soc.d.get(row.date, '—') }}% |";
+            tpl += "\n{%- endfor %}\n";
+
+            forecastTableCard = {
+              type: 'markdown',
+              title: '📊 EMHASS Forecast Timeline',
+              content: tpl,
+              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { max-height: 400px; overflow-y: auto; font-size: 12px; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
+            };
+          }
+        }
+      }
+      if (forecastTableCard) houseStack.push(forecastTableCard);
+
       if (solcastCard) houseStack.push(solcastCard);
       newCards.push({ type: 'vertical-stack', cards: houseStack });
 
