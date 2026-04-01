@@ -4062,6 +4062,7 @@ return forecast.map(function(d) {
           const iterEntity = hExpP || hImpP || hSolar || hLoad || hGrid || hBatt || hSoc;
           if (iterEntity) {
             let tpl = '';
+            tpl += '<details open>\n<summary style="cursor:pointer;font-weight:bold;font-size:16px;padding:4px 0;list-style:none;display:flex;align-items:center;gap:6px;"><span style="transition:transform 0.2s;display:inline-block;">▶</span> 📊 HAEO Forecast Timeline</summary>\n<div>\n\n';
             // Collect all forecast arrays into time-keyed maps
             tpl += "{%- set _iter = state_attr('" + iterEntity + "', 'forecast') or [] %}\n";
             if (hImpP) tpl += "{%- set _imp_fc = state_attr('" + hImpP + "', 'forecast') or [] %}\n";
@@ -4112,16 +4113,16 @@ return forecast.map(function(d) {
             if (hBatt) tpl += " {{ ns.batt.get(ts|string, '—') }} |";
             if (hSoc) tpl += " {{ ns.soc.get(ts|string, '—') }}% |";
             tpl += "\n{%- endfor %}\n";
+            tpl += "</div>\n</details>\n";
 
             forecastTableCard = {
               type: 'markdown',
-              title: '📊 HAEO Forecast Timeline',
               content: tpl,
-              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { max-height: 400px; overflow-y: auto; font-size: 12px; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
+              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { font-size: 12px; } ha-card details > div { max-height: 400px; overflow-y: auto; } ha-card details[open] > summary span:first-child { transform: rotate(90deg); } ha-card summary { color: ' + _ftText + '; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
             };
           }
         } else if (emsP === 'emhass') {
-          // EMHASS forecast table — uses attributes from MPC entities
+          // EMHASS forecast table — each MPC entity has its own forecast attribute
           const mpPv = e.mpc_pv || '';
           const mpBatt = e.mpc_battery || '';
           const mpGrid = e.mpc_grid || '';
@@ -4130,48 +4131,58 @@ return forecast.map(function(d) {
           const bpEnt = e.buy_price || '';
           const spEnt = e.sell_price || '';
 
-          const iterEnt = mpPv || mpBatt || mpGrid || mpLoad || '';
+          const iterEnt = mpPv || mpGrid || mpLoad || mpBatt || '';
           if (iterEnt) {
             let tpl = '';
-            // EMHASS uses attributes.forecasts with {date, mpc_*_power} structure
-            tpl += "{%- set _fc = state_attr('" + iterEnt + "', 'forecasts') or [] %}\n";
-            if (mpBatt) tpl += "{%- set _batt_fc = state_attr('" + mpBatt + "', 'battery_scheduled_power') or [] %}\n";
-            if (mpBatt) tpl += "{%- set ns_batt = namespace(d={}) %}\n{%- for p in _batt_fc %}{%- set ns_batt.d = dict(ns_batt.d, **{p.date: (p.mpc_batt_power / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpSoc) tpl += "{%- set _soc_fc = state_attr('" + mpSoc + "', 'battery_scheduled_soc') or [] %}\n";
-            if (mpSoc) tpl += "{%- set ns_soc = namespace(d={}) %}\n{%- for p in _soc_fc %}{%- set ns_soc.d = dict(ns_soc.d, **{p.date: p.mpc_batt_soc | round(0)}) %}{%- endfor %}\n";
+            tpl += '<details open>\n<summary style="cursor:pointer;font-weight:bold;font-size:16px;padding:4px 0;list-style:none;display:flex;align-items:center;gap:6px;"><span style="transition:transform 0.2s;display:inline-block;">▶</span> 📊 EMHASS Forecast Timeline</summary>\n<div>\n\n';
+            // Load each entity's forecast into a time-keyed dict
+            // PV forecasts (primary iterator)
+            tpl += "{%- set _iter = state_attr('" + iterEnt + "', 'forecasts') or state_attr('" + iterEnt + "', 'battery_scheduled_power') or [] %}\n";
+            tpl += "{%- set ns = namespace(pv={}, grid={}, load={}, batt={}, soc={}) %}\n";
+            // Build time-keyed lookups for each entity
+            if (mpPv) tpl += "{%- for p in (state_attr('" + mpPv + "', 'forecasts') or []) %}{%- set ns.pv = dict(ns.pv, **{p.date: ((p.mpc_pv_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpGrid) tpl += "{%- for p in (state_attr('" + mpGrid + "', 'forecasts') or []) %}{%- set ns.grid = dict(ns.grid, **{p.date: ((p.mpc_grid_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpLoad) tpl += "{%- for p in (state_attr('" + mpLoad + "', 'forecasts') or []) %}{%- set ns.load = dict(ns.load, **{p.date: ((p.mpc_load_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpBatt) tpl += "{%- for p in (state_attr('" + mpBatt + "', 'battery_scheduled_power') or []) %}{%- set ns.batt = dict(ns.batt, **{p.date: ((p.mpc_batt_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpSoc) tpl += "{%- for p in (state_attr('" + mpSoc + "', 'battery_scheduled_soc') or []) %}{%- set ns.soc = dict(ns.soc, **{p.date: (p.mpc_batt_soc | float(0)) | round(0)}) %}{%- endfor %}\n";
             // Header
             tpl += "| Time |";
             if (bpEnt) tpl += " Buy |";
             if (spEnt) tpl += " Sell |";
-            tpl += " PV | Load | Grid |";
+            if (mpPv) tpl += " PV |";
+            if (mpLoad) tpl += " Load |";
+            if (mpGrid) tpl += " Grid |";
             if (mpBatt) tpl += " Batt |";
             if (mpSoc) tpl += " SoC |";
             tpl += "\n";
             tpl += "|:---:|";
             if (bpEnt) tpl += ":---:|";
             if (spEnt) tpl += ":---:|";
-            tpl += ":---:|:---:|:---:|";
+            if (mpPv) tpl += ":---:|";
+            if (mpLoad) tpl += ":---:|";
+            if (mpGrid) tpl += ":---:|";
             if (mpBatt) tpl += ":---:|";
             if (mpSoc) tpl += ":---:|";
             tpl += "\n";
-            // Data rows — iterate over the MPC forecasts array
-            tpl += "{%- for row in _fc %}\n";
-            tpl += "{%- set t = row.date | as_datetime | as_local | as_timestamp | timestamp_custom('%H:%M') %}\n";
+            // Data rows — iterate over the primary entity's forecast
+            tpl += "{%- for row in _iter %}\n";
+            tpl += "{%- set dt = row.date %}\n";
+            tpl += "{%- set t = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%H:%M') %}\n";
             tpl += "| {{ t }} |";
-            if (bpEnt) tpl += " {{ states('" + bpEnt + "') | round(1) }} |";
-            if (spEnt) tpl += " {{ states('" + spEnt + "') | round(1) }} |";
-            tpl += " {{ (row.mpc_pv_power / 1000) | round(2) }} |";
-            tpl += " {{ (row.mpc_load_power / 1000) | round(2) }} |";
-            tpl += " {{ (row.mpc_grid_power / 1000) | round(2) }} |";
-            if (mpBatt) tpl += " {{ ns_batt.d.get(row.date, '—') }} |";
-            if (mpSoc) tpl += " {{ ns_soc.d.get(row.date, '—') }}% |";
+            if (bpEnt) tpl += " {{ states('" + bpEnt + "') | float(0) | round(1) }} |";
+            if (spEnt) tpl += " {{ states('" + spEnt + "') | float(0) | round(1) }} |";
+            if (mpPv) tpl += " {{ ns.pv.get(dt, '—') }} |";
+            if (mpLoad) tpl += " {{ ns.load.get(dt, '—') }} |";
+            if (mpGrid) tpl += " {{ ns.grid.get(dt, '—') }} |";
+            if (mpBatt) tpl += " {{ ns.batt.get(dt, '—') }} |";
+            if (mpSoc) tpl += " {{ ns.soc.get(dt, '—') }}% |";
             tpl += "\n{%- endfor %}\n";
+            tpl += "</div>\n</details>\n";
 
             forecastTableCard = {
               type: 'markdown',
-              title: '📊 EMHASS Forecast Timeline',
               content: tpl,
-              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { max-height: 400px; overflow-y: auto; font-size: 12px; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
+              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { font-size: 12px; } ha-card details > div { max-height: 400px; overflow-y: auto; } ha-card details[open] > summary span:first-child { transform: rotate(90deg); } ha-card summary { color: ' + _ftText + '; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
             };
           }
         }

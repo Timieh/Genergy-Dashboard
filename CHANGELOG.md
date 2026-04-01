@@ -2,6 +2,16 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.17.1] - 2026-04-02
+
+### Fixed
+- **EMHASS Forecast Table Data** — Fixed empty table caused by each MPC entity storing forecasts in separate attributes. Rewrote template to use time-keyed lookups across `sensor.mpc_pv_power`, `sensor.mpc_grid_power`, `sensor.mpc_load_power`, `sensor.mpc_batt_power`, and `sensor.mpc_batt_soc` independently
+- **String-to-Float Conversion** — All EMHASS forecast values are strings; added `| float(0)` conversion before arithmetic operations
+
+### Changed
+- **Collapsible Forecast Table** — Forecast table (both HAEO and EMHASS) is now wrapped in a `<details>` element with a clickable header. Click the arrow/title to collapse or expand the table
+- **Scrollable Table Content** — Table content scrolls independently within a 400px max-height container with sticky column headers
+
 ## [2.17.0] - 2026-04-02
 
 ### Added
