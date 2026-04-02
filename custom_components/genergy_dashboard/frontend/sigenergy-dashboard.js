@@ -4553,7 +4553,7 @@ return forecast.map(function(d) {
         layout: 'horizontal',
         show_names: true, show_states: true, show_units: true, show_icons: false,
         round: 1, height: 500, wide: true,
-        min_box_size: 20, min_box_distance: 5, unit_prefix: 'k',
+        min_box_size: 30, min_box_distance: 5, unit_prefix: 'k',
         min_state: 0.01,
         throttle: 10000,
         energy_date_selection: false,
@@ -4710,7 +4710,7 @@ return forecast.map(function(d) {
         css += 'path[fill-opacity="0.4"] { fill-opacity: 0.55 !important; }\n';
         css += 'path[fill-opacity="0.85"] { fill-opacity: 0.95 !important; }\n';
         // Make entire box area hoverable (not just the colored strip)
-        css += '.box { cursor: pointer !important; min-height: 20px !important; }\n';
+        css += '.box { cursor: pointer !important; min-height: 30px !important; overflow: visible !important; }\n';
         // Reduce box height transition jitter from live value updates
         css += '.box { transition: height 0.5s ease !important; }\n';
         css += '.spacerv { transition: height 0.5s ease !important; }\n';
@@ -4760,7 +4760,7 @@ return forecast.map(function(d) {
         css += 'path[fill-opacity="0.85"] { fill-opacity: 0.95 !important; }\n';
         css += '.container, .section { overflow: visible !important; }\n';
         css += '.spacerv { transition: height 0.5s ease !important; }\n';
-        css += '.box { overflow: hidden !important; position: relative !important; min-height: 20px !important; cursor: pointer !important; transition: height 0.5s ease !important; }\n';
+        css += '.box { overflow: visible !important; position: relative !important; min-height: 30px !important; cursor: pointer !important; transition: height 0.5s ease !important; }\n';
         css += '.section:first-of-type .box > div:first-child { min-width: 90px !important; border-radius: 8px 0 0 8px !important; }\n';
         css += '.section:last-of-type .box > div:first-child { min-width: 90px !important; border-radius: 0 8px 8px 0 !important; }\n';
         css += '.box .label { position: absolute !important; top: 2px !important; bottom: 2px !important; transform: none !important; display: flex !important; flex-direction: column !important; justify-content: flex-start !important; gap: 0px !important; line-height: normal !important; z-index: 2 !important; width: auto !important; max-width: 160px !important; overflow: visible !important; padding: 0 6px !important; background: transparent !important; margin: 0 !important; }\n';
