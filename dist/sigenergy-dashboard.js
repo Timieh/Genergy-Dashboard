@@ -4041,7 +4041,7 @@ return forecast.map(function(d) {
       let ftToggleCard = null;
       let ftConditionalCard = null;
       if (f.forecast_table && emsP !== 'none') {
-        const currency = cfg.display?.currency || '€';
+        const currency = cfg.pricing?.currency || '€';
         const _ft = _resolvedTheme;
         const _ftBg = _ft === 'light' ? '#f8f9fa' : 'rgba(30,35,54,0.94)';
         const _ftBorder = _ft === 'light' ? '#e0e0e0' : '#2d3451';
@@ -4110,26 +4110,56 @@ return forecast.map(function(d) {
             if (hGrid) haeCols++;
             if (hBatt) haeCols++;
             if (hSoc) haeCols++;
-            // Data rows
+            // Data rows — past rows dimmed, NOW separator, future rows normal
             tpl += "{%- set _prevDay = namespace(d='') %}\n";
+            tpl += "{%- set _nowTs = now().timestamp() | int %}\n";
+            tpl += "{%- set _nowShown = namespace(done=false) %}\n";
             tpl += "{%- for p in _iter %}\n";
             tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
+            tpl += "{%- set _tsInt = ts | int %}\n";
+            tpl += "{%- set _isPast = _tsInt < (_nowTs - 450) %}\n";
+            tpl += "{%- set _isNow = (_tsInt - _nowTs) | abs < 450 %}\n";
             tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
             tpl += "{%- if _day != _prevDay.d %}{%- set _prevDay.d = _day %}\n";
             tpl += "| **📅 {{ ts | timestamp_custom('%A %d %b') }}** |";
             for (let i = 1; i < haeCols; i++) tpl += " |";
             tpl += "\n{%- endif %}\n";
+            // Insert NOW separator row before the current timeslot
+            tpl += "{%- if _isNow and not _nowShown.done %}{%- set _nowShown.done = true %}\n";
+            tpl += "| **⏱ NOW** |";
+            for (let i = 1; i < haeCols; i++) tpl += " |";
+            tpl += "\n{%- endif %}\n";
             tpl += "{%- set t = ts | timestamp_custom('%H:%M') %}\n";
-            tpl += "{%- set _isNow = (ts | int - now().timestamp() | int) | abs < 900 %}\n";
-            tpl += "| {{ '**▶ ' + t + '**' if _isNow else t }} |";
+            // Past rows: dim all values with grey font. Current/future: normal colors
+            tpl += "{%- if _isPast %}\n";
+            tpl += "| <font color='#555'>{{ t }}</font> |";
+            if (hImpP) tpl += " <font color='#555'>{{ ns.imp.get(ts|string, '—') }}</font> |";
+            if (hExpP) tpl += " <font color='#555'>{{ ns.exp.get(ts|string, '—') }}</font> |";
+            if (hSolar) tpl += " <font color='#555'>{{ ns.solar.get(ts|string, '0') }}</font> |";
+            if (hLoad) tpl += " <font color='#555'>{{ ns.load.get(ts|string, '—') }}</font> |";
+            if (hGrid) tpl += " <font color='#555'>{{ ns.grid.get(ts|string, '—') }}</font> |";
+            if (hBatt) tpl += " <font color='#555'>{{ ns.batt.get(ts|string, '—') }}</font> |";
+            if (hSoc) tpl += " <font color='#555'>{{ ns.soc.get(ts|string, '—') }}%</font> |";
+            tpl += "\n{%- elif _isNow %}\n";
+            tpl += "| **{{ t }}** |";
+            if (hImpP) tpl += " **<font color='red'>{{ ns.imp.get(ts|string, '—') }}</font>** |";
+            if (hExpP) tpl += " **<font color='green'>{{ ns.exp.get(ts|string, '—') }}</font>** |";
+            if (hSolar) tpl += " **{%- set _s = ns.solar.get(ts|string) %}{{ '<font color=#e8a835>' ~ _s ~ '</font>' if _s and _s != 0 else '<font color=grey>0</font>' if _s == 0 else '—' }}** |";
+            if (hLoad) tpl += " **{{ ns.load.get(ts|string, '—') }}** |";
+            if (hGrid) tpl += " **{%- set _g = ns.grid.get(ts|string) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font>** |";
+            if (hBatt) tpl += " **{%- set _b = ns.batt.get(ts|string) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font>** |";
+            if (hSoc) tpl += " **{%- set _sc = ns.soc.get(ts|string)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(ts|string, '—') }}%</font>** |";
+            tpl += "\n{%- else %}\n";
+            tpl += "| {{ t }} |";
             if (hImpP) tpl += " <font color='red'>{{ ns.imp.get(ts|string, '—') }}</font> |";
             if (hExpP) tpl += " <font color='green'>{{ ns.exp.get(ts|string, '—') }}</font> |";
-            if (hSolar) tpl += " {%- set _s = ns.solar.get(ts|string) %}{{ _s if _s and _s != 0 else '<font color=grey>0</font>' if _s == 0 else '—' }} |";
+            if (hSolar) tpl += " {%- set _s = ns.solar.get(ts|string) %}{{ '<font color=#e8a835>' ~ _s ~ '</font>' if _s and _s != 0 else '<font color=grey>0</font>' if _s == 0 else '—' }} |";
             if (hLoad) tpl += " {{ ns.load.get(ts|string, '—') }} |";
             if (hGrid) tpl += " {%- set _g = ns.grid.get(ts|string) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
-            if (hBatt) tpl += " {{ ns.batt.get(ts|string, '—') }} |";
-            if (hSoc) tpl += " {{ ns.soc.get(ts|string, '—') }}% |";
-            tpl += "\n{%- endfor %}\n";
+            if (hBatt) tpl += " {%- set _b = ns.batt.get(ts|string) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font> |";
+            if (hSoc) tpl += " {%- set _sc = ns.soc.get(ts|string)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(ts|string, '—') }}%</font> |";
+            tpl += "\n{%- endif %}\n";
+            tpl += "{%- endfor %}\n";
 
             forecastTableCard = {
               type: 'markdown',
@@ -4191,26 +4221,56 @@ return forecast.map(function(d) {
             if (mpGrid) emCols++;
             if (mpBatt) emCols++;
             if (mpSoc) emCols++;
-            // Data rows — iterate over the primary entity's forecast
+            // Data rows — past rows dimmed, NOW separator, future rows normal
             tpl += "{%- set _prevDay = namespace(d='') %}\n";
+            tpl += "{%- set _nowTs = now().timestamp() | int %}\n";
+            tpl += "{%- set _nowShown = namespace(done=false) %}\n";
             tpl += "{%- for row in _iter %}\n";
             tpl += "{%- set dt = row.date %}\n";
+            tpl += "{%- set _tsInt = dt | as_datetime | as_local | as_timestamp | int %}\n";
+            tpl += "{%- set _isPast = _tsInt < (_nowTs - 450) %}\n";
+            tpl += "{%- set _isNow = (_tsInt - _nowTs) | abs < 450 %}\n";
             tpl += "{%- set _day = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
             tpl += "{%- if _day != _prevDay.d %}{%- set _prevDay.d = _day %}\n";
             tpl += "| **📅 {{ dt | as_datetime | as_local | as_timestamp | timestamp_custom('%A %d %b') }}** |";
             for (let i = 1; i < emCols; i++) tpl += " |";
             tpl += "\n{%- endif %}\n";
+            // Insert NOW separator row before the current timeslot
+            tpl += "{%- if _isNow and not _nowShown.done %}{%- set _nowShown.done = true %}\n";
+            tpl += "| **⏱ NOW** |";
+            for (let i = 1; i < emCols; i++) tpl += " |";
+            tpl += "\n{%- endif %}\n";
             tpl += "{%- set t = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%H:%M') %}\n";
-            tpl += "{%- set _isNow = (dt | as_datetime | as_local | as_timestamp | int - now().timestamp() | int) | abs < 900 %}\n";
-            tpl += "| {{ '**▶ ' + t + '**' if _isNow else t }} |";
+            // Past rows: dim all values with grey font. Current/future: normal colors
+            tpl += "{%- if _isPast %}\n";
+            tpl += "| <font color='#555'>{{ t }}</font> |";
+            if (bpEnt) tpl += " <font color='#555'>{{ ns.buy.get(dt, '—') }}</font> |";
+            if (spEnt) tpl += " <font color='#555'>{{ ns.sell.get(dt, '—') }}</font> |";
+            if (mpPv) tpl += " <font color='#555'>{{ ns.pv.get(dt, '0') }}</font> |";
+            if (mpLoad) tpl += " <font color='#555'>{{ ns.load.get(dt, '—') }}</font> |";
+            if (mpGrid) tpl += " <font color='#555'>{{ ns.grid.get(dt, '—') }}</font> |";
+            if (mpBatt) tpl += " <font color='#555'>{{ ns.batt.get(dt, '—') }}</font> |";
+            if (mpSoc) tpl += " <font color='#555'>{{ ns.soc.get(dt, '—') }}%</font> |";
+            tpl += "\n{%- elif _isNow %}\n";
+            tpl += "| **{{ t }}** |";
+            if (bpEnt) tpl += " **<font color='red'>{{ ns.buy.get(dt, '—') }}</font>** |";
+            if (spEnt) tpl += " **<font color='green'>{{ ns.sell.get(dt, '—') }}</font>** |";
+            if (mpPv) tpl += " **{%- set _pv = ns.pv.get(dt) %}{{ '<font color=#e8a835>' ~ _pv ~ '</font>' if _pv and _pv != 0 else '<font color=grey>0</font>' if _pv == 0 else '—' }}** |";
+            if (mpLoad) tpl += " **{{ ns.load.get(dt, '—') }}** |";
+            if (mpGrid) tpl += " **{%- set _g = ns.grid.get(dt) %}<font color='{{ 'red' if (_g|float(0)) > 0 else 'green' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font>** |";
+            if (mpBatt) tpl += " **{%- set _b = ns.batt.get(dt) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font>** |";
+            if (mpSoc) tpl += " **{%- set _sc = ns.soc.get(dt)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(dt, '—') }}%</font>** |";
+            tpl += "\n{%- else %}\n";
+            tpl += "| {{ t }} |";
             if (bpEnt) tpl += " <font color='red'>{{ ns.buy.get(dt, '—') }}</font> |";
             if (spEnt) tpl += " <font color='green'>{{ ns.sell.get(dt, '—') }}</font> |";
-            if (mpPv) tpl += " {%- set _pv = ns.pv.get(dt) %}{{ _pv if _pv and _pv != 0 else '<font color=grey>0</font>' if _pv == 0 else '—' }} |";
+            if (mpPv) tpl += " {%- set _pv = ns.pv.get(dt) %}{{ '<font color=#e8a835>' ~ _pv ~ '</font>' if _pv and _pv != 0 else '<font color=grey>0</font>' if _pv == 0 else '—' }} |";
             if (mpLoad) tpl += " {{ ns.load.get(dt, '—') }} |";
-            if (mpGrid) tpl += " {%- set _g = ns.grid.get(dt) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
-            if (mpBatt) tpl += " {{ ns.batt.get(dt, '—') }} |";
-            if (mpSoc) tpl += " {{ ns.soc.get(dt, '—') }}% |";
-            tpl += "\n{%- endfor %}\n";
+            if (mpGrid) tpl += " {%- set _g = ns.grid.get(dt) %}<font color='{{ 'red' if (_g|float(0)) > 0 else 'green' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
+            if (mpBatt) tpl += " {%- set _b = ns.batt.get(dt) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font> |";
+            if (mpSoc) tpl += " {%- set _sc = ns.soc.get(dt)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(dt, '—') }}%</font> |";
+            tpl += "\n{%- endif %}";
+            tpl += "{%- endfor %}\n";
 
             forecastTableCard = {
               type: 'markdown',
