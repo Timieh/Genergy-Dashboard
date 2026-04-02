@@ -4051,7 +4051,7 @@ return forecast.map(function(d) {
         const _ftNowBg = _ft === 'light' ? 'rgba(0,212,184,0.12)' : 'rgba(0,212,184,0.15)';
 
         if (emsP === 'haeo') {
-          // HAEO forecast table — uses forecast attributes
+          // HAEO forecast table — uses forecast attributes (HTML table via html-template-card)
           const hImpP = e.haeo_import_price || '';
           const hExpP = e.haeo_export_price || '';
           const hBatt = e.haeo_battery_charge || e.haeo_battery_discharge || '';
@@ -4059,11 +4059,30 @@ return forecast.map(function(d) {
           const hSolar = e.haeo_solar_power || '';
           const hLoad = e.haeo_load_power || '';
           const hSoc = e.haeo_battery_soc || '';
+          const hHasNet = hImpP && hExpP && hGrid;
 
           // Build Jinja2 template — iterates over export price forecast or falls back
           const iterEntity = hExpP || hImpP || hSolar || hLoad || hGrid || hBatt || hSoc;
           if (iterEntity) {
+            // Count total columns for colspan in day-divider rows
+            let haeCols = 1; // Time
+            if (hImpP) haeCols++;
+            if (hExpP) haeCols++;
+            if (hSolar) haeCols++;
+            if (hLoad) haeCols++;
+            if (hGrid) haeCols++;
+            if (hBatt) haeCols++;
+            if (hSoc) haeCols++;
+            if (hHasNet) haeCols++;
+            const leftCols = Math.max(1, haeCols - 3);
+            const rightCols = haeCols - leftCols;
+
             let tpl = '';
+            // CSS variables for theming
+            const _thStyle = "position:sticky; top:0; z-index:2; background:var(--card-background-color); padding:4px 6px; border-bottom:2px solid var(--divider-color); text-align:center; white-space:nowrap; font-size:11px; color:var(--secondary-text-color);";
+            const _tdStyle = "padding:4px 6px; border-bottom:1px solid var(--divider-color); text-align:center; white-space:nowrap;";
+            const _dayStyle = "padding:6px; border-bottom:1px solid var(--divider-color); border-top:2px solid var(--divider-color); font-weight:bold; background:var(--secondary-background-color);";
+
             // Collect all forecast arrays into time-keyed maps
             tpl += "{%- set _iter = state_attr('" + iterEntity + "', 'forecast') or [] %}\n";
             if (hImpP) tpl += "{%- set _imp_fc = state_attr('" + hImpP + "', 'forecast') or [] %}\n";
@@ -4073,103 +4092,169 @@ return forecast.map(function(d) {
             if (hSolar) tpl += "{%- set _solar_fc = state_attr('" + hSolar + "', 'forecast') or [] %}\n";
             if (hLoad) tpl += "{%- set _load_fc = state_attr('" + hLoad + "', 'forecast') or [] %}\n";
             if (hSoc) tpl += "{%- set _soc_fc = state_attr('" + hSoc + "', 'forecast') or [] %}\n";
+
             // Build time-keyed lookup dicts
             tpl += "{%- set ns = namespace(imp={}, exp={}, batt={}, grid={}, solar={}, load={}, soc={}) %}\n";
-            if (hImpP) tpl += "{%- for p in _imp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.imp = dict(ns.imp, **{ts: (p.value * 100) | round(1)}) %}{%- endfor %}\n";
-            if (hExpP) tpl += "{%- for p in _exp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.exp = dict(ns.exp, **{ts: (p.value * 100) | round(1)}) %}{%- endfor %}\n";
+            if (hImpP) tpl += "{%- for p in _imp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.imp = dict(ns.imp, **{ts: (p.value * 100) | round(2)}) %}{%- endfor %}\n";
+            if (hExpP) tpl += "{%- for p in _exp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.exp = dict(ns.exp, **{ts: (p.value * 100) | round(2)}) %}{%- endfor %}\n";
             if (hBatt) tpl += "{%- for p in _batt_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.batt = dict(ns.batt, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
             if (hGrid) tpl += "{%- for p in _grid_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.grid = dict(ns.grid, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
             if (hSolar) tpl += "{%- for p in _solar_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.solar = dict(ns.solar, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
             if (hLoad) tpl += "{%- for p in _load_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.load = dict(ns.load, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
             if (hSoc) tpl += "{%- for p in _soc_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.soc = dict(ns.soc, **{ts: (p.value) | round(0)}) %}{%- endfor %}\n";
-            // Header
-            tpl += "\n| Time |";
-            if (hImpP) tpl += " Buy " + currency + " |";
-            if (hExpP) tpl += " Sell " + currency + " |";
-            if (hSolar) tpl += " PV kW |";
-            if (hLoad) tpl += " Load kW |";
-            if (hGrid) tpl += " Grid kW |";
-            if (hBatt) tpl += " Batt kW |";
-            if (hSoc) tpl += " SoC % |";
-            tpl += "\n";
-            tpl += "|:---:|";
-            if (hImpP) tpl += ":---:|";
-            if (hExpP) tpl += ":---:|";
-            if (hSolar) tpl += ":---:|";
-            if (hLoad) tpl += ":---:|";
-            if (hGrid) tpl += ":---:|";
-            if (hBatt) tpl += ":---:|";
-            if (hSoc) tpl += ":---:|";
-            tpl += "\n";
-            // Count columns for day divider
-            let haeCols = 1; // Time column
-            if (hImpP) haeCols++;
-            if (hExpP) haeCols++;
-            if (hSolar) haeCols++;
-            if (hLoad) haeCols++;
-            if (hGrid) haeCols++;
-            if (hBatt) haeCols++;
-            if (hSoc) haeCols++;
-            // Data rows — past rows dimmed, NOW separator, future rows normal
-            tpl += "{%- set _prevDay = namespace(d='') %}\n";
-            tpl += "{%- set _nowTs = now().timestamp() | int %}\n";
-            tpl += "{%- set _nowShown = namespace(done=false) %}\n";
+
+            // Compute per-slot net cost from buy/sell prices and grid power
+            if (hHasNet) {
+              tpl += "{%- set ns2 = namespace(daily={}, cur_day='', cur_total=0) %}\n";
+              tpl += "{%- for p in _iter %}\n";
+              tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
+              tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
+              tpl += "{%- set _g = ns.grid.get(ts|string, 0)|float(0) %}\n";
+              tpl += "{%- set _bp = ns.imp.get(ts|string, 0)|float(0) / 100 %}\n";
+              tpl += "{%- set _sp = ns.exp.get(ts|string, 0)|float(0) / 100 %}\n";
+              // HAEO: grid > 0 = export (selling), grid < 0 = import (buying)
+              tpl += "{%- set _slot_cost = (_sp * [_g, 0]|max * -1) + (_bp * [-_g, 0]|max) %}\n";
+              tpl += "{%- if _day != ns2.cur_day %}\n";
+              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
+              tpl += "{%- set ns2.cur_day = _day %}{%- set ns2.cur_total = _slot_cost %}\n";
+              tpl += "{%- else %}{%- set ns2.cur_total = ns2.cur_total + _slot_cost %}{%- endif %}\n";
+              tpl += "{%- endfor %}\n";
+              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
+            }
+
+            tpl += "{%- set today = now() | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
+            tpl += "{%- set months = ['January','February','March','April','May','June','July','August','September','October','November','December'] %}\n";
+
+            // HTML table start
+            tpl += '<div style="max-height:570px; overflow-y:auto; position:relative;">\n';
+            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px;">\n';
+            tpl += '<thead><tr>\n';
+            tpl += '<th style="' + _thStyle + '">Time</th>\n';
+            if (hImpP) tpl += '<th style="' + _thStyle + '">Buy ' + currency + '</th>\n';
+            if (hExpP) tpl += '<th style="' + _thStyle + '">Sell ' + currency + '</th>\n';
+            if (hSolar) tpl += '<th style="' + _thStyle + '">PV kW</th>\n';
+            if (hLoad) tpl += '<th style="' + _thStyle + '">Load kW</th>\n';
+            if (hGrid) tpl += '<th style="' + _thStyle + '">Grid kW</th>\n';
+            if (hBatt) tpl += '<th style="' + _thStyle + '">Batt kW</th>\n';
+            if (hSoc) tpl += '<th style="' + _thStyle + '">SoC %</th>\n';
+            if (hHasNet) tpl += '<th style="' + _thStyle + '">Net ' + currency + '</th>\n';
+            tpl += '</tr></thead>\n';
+
+            // TODAY section — fully expanded
+            tpl += '<tbody>\n';
+            tpl += "{%- set _todayHeader = namespace(shown=false) %}\n";
             tpl += "{%- for p in _iter %}\n";
             tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
-            tpl += "{%- set _tsInt = ts | int %}\n";
-            tpl += "{%- set _isPast = _tsInt < (_nowTs - 450) %}\n";
-            tpl += "{%- set _isNow = (_tsInt - _nowTs) | abs < 450 %}\n";
             tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- if _day != _prevDay.d %}{%- set _prevDay.d = _day %}\n";
-            tpl += "| **📅 {{ ts | timestamp_custom('%A %d %b') }}** |";
-            for (let i = 1; i < haeCols; i++) tpl += " |";
-            tpl += "\n{%- endif %}\n";
-            // Insert NOW separator row before the current timeslot
-            tpl += "{%- if _isNow and not _nowShown.done %}{%- set _nowShown.done = true %}\n";
-            tpl += "| **⏱ NOW** |";
-            for (let i = 1; i < haeCols; i++) tpl += " |";
-            tpl += "\n{%- endif %}\n";
+            tpl += "{%- if _day == today %}\n";
+            tpl += "{%- set _isNow = (ts | int - now().timestamp() | int) | abs < 900 %}\n";
+            tpl += "{%- if not _todayHeader.shown %}{%- set _todayHeader.shown = true %}\n";
+            if (hHasNet) {
+              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
+              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
+              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
+            }
+            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
+            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
+            tpl += '<tr><td colspan="' + leftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
+            if (hHasNet) {
+              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
+            } else {
+              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
+            }
+            tpl += '</tr>\n';
+            tpl += "{%- endif %}\n";
+
+            // Data row
             tpl += "{%- set t = ts | timestamp_custom('%H:%M') %}\n";
-            // Past rows: dim all values with grey font. Current/future: normal colors
+            tpl += "{%- set _isPast = ts | int < (now().timestamp() | int - 450) %}\n";
+            // Value lookups
+            if (hImpP) tpl += "{%- set _imp_val = ns.imp.get(ts|string, 0) | float(0) %}\n";
+            if (hExpP) tpl += "{%- set _exp_val = ns.exp.get(ts|string, 0) | float(0) %}\n";
+            if (hGrid) tpl += "{%- set _g = ns.grid.get(ts|string) %}\n";
+            if (hSoc) tpl += "{%- set _soc_val = ns.soc.get(ts|string) | float(50) %}\n";
+            if (hHasNet) {
+              tpl += "{%- set _g_f = ns.grid.get(ts|string, 0)|float(0) %}\n";
+              tpl += "{%- set _nc = (ns.exp.get(ts|string,0)|float(0)/100) * [_g_f, 0]|max * -1 + (ns.imp.get(ts|string,0)|float(0)/100) * [-_g_f, 0]|max %}\n";
+            }
+
+            // Colors
+            if (hImpP) tpl += "{%- set _imp_color = '#ff2222' if _imp_val >= 50 else '#cc6600' if _imp_val >= 40 else '#cccc00' if _imp_val >= 30 else '#00e5cc' if _imp_val >= 20 else '#888888' %}\n";
+            if (hExpP) tpl += "{%- set _exp_color = '#00ff00' if _exp_val >= 250 else '#00cc00' if _exp_val >= 100 else '#009900' if _exp_val >= 50 else '#336633' if _exp_val >= 30 else '#888888' %}\n";
+            if (hGrid) tpl += "{%- set _g_color = '#00cc00' if (_g|float(0)) > 0 else '#ff4444' if (_g|float(0)) < 0 else '#888888' %}\n";
+            if (hSoc) tpl += "{%- set _soc_color = '#ff4444' if _soc_val <= 20 else '#00cc00' if _soc_val >= 75 else '' %}\n";
+            if (hHasNet) tpl += "{%- set _nc_color = '#00cc00' if _nc < -0.001 else '#ff4444' if _nc > 0.001 else '' %}\n";
+
             tpl += "{%- if _isPast %}\n";
-            tpl += "| <font color='#555'>{{ t }}</font> |";
-            if (hImpP) tpl += " <font color='#555'>{{ ns.imp.get(ts|string, '—') }}</font> |";
-            if (hExpP) tpl += " <font color='#555'>{{ ns.exp.get(ts|string, '—') }}</font> |";
-            if (hSolar) tpl += " <font color='#555'>{{ ns.solar.get(ts|string, '0') }}</font> |";
-            if (hLoad) tpl += " <font color='#555'>{{ ns.load.get(ts|string, '—') }}</font> |";
-            if (hGrid) tpl += " <font color='#555'>{{ ns.grid.get(ts|string, '—') }}</font> |";
-            if (hBatt) tpl += " <font color='#555'>{{ ns.batt.get(ts|string, '—') }}</font> |";
-            if (hSoc) tpl += " <font color='#555'>{{ ns.soc.get(ts|string, '—') }}%</font> |";
-            tpl += "\n{%- elif _isNow %}\n";
-            tpl += "| **{{ t }}** |";
-            if (hImpP) tpl += " **<font color='red'>{{ ns.imp.get(ts|string, '—') }}</font>** |";
-            if (hExpP) tpl += " **<font color='green'>{{ ns.exp.get(ts|string, '—') }}</font>** |";
-            if (hSolar) tpl += " **{%- set _s = ns.solar.get(ts|string) %}{{ '<font color=#e8a835>' ~ _s ~ '</font>' if _s and _s != 0 else '<font color=grey>0</font>' if _s == 0 else '—' }}** |";
-            if (hLoad) tpl += " **{{ ns.load.get(ts|string, '—') }}** |";
-            if (hGrid) tpl += " **{%- set _g = ns.grid.get(ts|string) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font>** |";
-            if (hBatt) tpl += " **{%- set _b = ns.batt.get(ts|string) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font>** |";
-            if (hSoc) tpl += " **{%- set _sc = ns.soc.get(ts|string)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(ts|string, '—') }}%</font>** |";
-            tpl += "\n{%- else %}\n";
-            tpl += "| {{ t }} |";
-            if (hImpP) tpl += " <font color='red'>{{ ns.imp.get(ts|string, '—') }}</font> |";
-            if (hExpP) tpl += " <font color='green'>{{ ns.exp.get(ts|string, '—') }}</font> |";
-            if (hSolar) tpl += " {%- set _s = ns.solar.get(ts|string) %}{{ '<font color=#e8a835>' ~ _s ~ '</font>' if _s and _s != 0 else '<font color=grey>0</font>' if _s == 0 else '—' }} |";
-            if (hLoad) tpl += " {{ ns.load.get(ts|string, '—') }} |";
-            if (hGrid) tpl += " {%- set _g = ns.grid.get(ts|string) %}<font color='{{ 'green' if (_g|float(0)) > 0 else 'red' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
-            if (hBatt) tpl += " {%- set _b = ns.batt.get(ts|string) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font> |";
-            if (hSoc) tpl += " {%- set _sc = ns.soc.get(ts|string)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(ts|string, '—') }}%</font> |";
-            tpl += "\n{%- endif %}\n";
+            // Past row — dimmed
+            tpl += '<tr style="opacity:0.4;"><td style="' + _tdStyle + '">{{ t }}</td>';
+            if (hImpP) tpl += '<td style="' + _tdStyle + '">{{ _imp_val | round(1) }}</td>';
+            if (hExpP) tpl += '<td style="' + _tdStyle + '">{{ _exp_val | round(1) }}</td>';
+            if (hSolar) tpl += '<td style="' + _tdStyle + '">{{ ns.solar.get(ts|string, 0) }}</td>';
+            if (hLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(ts|string, \'—\') }}</td>';
+            if (hGrid) tpl += '<td style="' + _tdStyle + '">{{ _g if _g is not none else \'—\' }}</td>';
+            if (hBatt) tpl += '<td style="' + _tdStyle + '">{{ ns.batt.get(ts|string, \'—\') }}</td>';
+            if (hSoc) tpl += '<td style="' + _tdStyle + '">{{ ns.soc.get(ts|string, \'—\') }}%</td>';
+            if (hHasNet) tpl += "<td style=\"" + _tdStyle + "\">{{ '%+0.4f' | format(_nc) }}</td>";
+            tpl += '</tr>\n';
+
+            tpl += "{%- else %}\n";
+            // Current/future row — colored
+            tpl += "<tr{{ ' style=font-weight:bold;' if _isNow else '' }}>";
+            tpl += '<td style="' + _tdStyle + '">{{ \'▶ \' + t if _isNow else t }}</td>';
+            if (hImpP) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _imp_color }};">{{ _imp_val | round(1) }}</span></td>';
+            if (hExpP) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _exp_color }};">{{ _exp_val | round(1) }}</span></td>';
+            if (hSolar) tpl += "<td style=\"" + _tdStyle + "\">{%- set _s = ns.solar.get(ts|string) %}{{ '<span style=color:#e8a835;>' ~ _s ~ '</span>' if _s and _s != 0 else '0' }}</td>";
+            if (hLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(ts|string, \'—\') }}</td>';
+            if (hGrid) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _g_color }};">{{ _g if _g is not none else \'—\' }}</span></td>';
+            if (hBatt) tpl += "<td style=\"" + _tdStyle + "\">{%- set _b = ns.batt.get(ts|string) %}<span style=\"color:{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }};\">{{ _b if _b is not none else '—' }}</span></td>";
+            if (hSoc) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _soc_color }};">{{ ns.soc.get(ts|string, \'—\') }}%</span></td>';
+            if (hHasNet) tpl += "<td style=\"" + _tdStyle + "\"><span style=\"color:{{ _nc_color }};\">{{ '%+0.4f' | format(_nc) }}</span></td>";
+            tpl += '</tr>\n';
+            tpl += "{%- endif %}\n";
+
+            tpl += "{%- endif %}\n"; // end if _day == today
             tpl += "{%- endfor %}\n";
+            tpl += '</tbody>\n';
+
+            // UPCOMING DAYS — summary rows only
+            tpl += '<tbody>\n';
+            tpl += '<tr><td colspan="' + haeCols + '" style="padding:8px 6px 4px 6px; text-align:left; font-size:11px; color:var(--secondary-text-color); letter-spacing:0.05em; border-top:3px solid var(--divider-color);">UPCOMING DAYS</td></tr>\n';
+            tpl += "{%- set _seenDays = namespace(days=[]) %}\n";
+            tpl += "{%- for p in _iter %}\n";
+            tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
+            tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
+            tpl += "{%- if _day != today and _day not in _seenDays.days %}\n";
+            tpl += "{%- set _seenDays.days = _seenDays.days + [_day] %}\n";
+            if (hHasNet) {
+              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
+              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
+              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
+            }
+            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
+            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
+            tpl += '<tr><td colspan="' + leftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
+            if (hHasNet) {
+              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
+            } else {
+              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
+            }
+            tpl += '</tr>\n';
+            tpl += "{%- endif %}\n";
+            tpl += "{%- endfor %}\n";
+            tpl += '</tbody>\n';
+
+            tpl += '</table></div>\n';
 
             forecastTableCard = {
-              type: 'markdown',
-              title: '📊 HAEO Forecast Timeline',
+              type: 'custom:html-template-card',
+              ignore_line_breaks: true,
               content: tpl,
-              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { max-height: 400px; overflow-y: auto; font-size: 12px; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; z-index: 1; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
+              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; }' }
             };
           }
         } else if (emsP === 'emhass') {
-          // EMHASS forecast table — each MPC entity has its own forecast attribute
+          // EMHASS forecast table — each MPC entity has its own forecast attribute (HTML table via html-template-card)
           const mpPv = e.mpc_pv || '';
           const mpBatt = e.mpc_battery || '';
           const mpGrid = e.mpc_grid || '';
@@ -4177,43 +4262,12 @@ return forecast.map(function(d) {
           const mpSoc = e.mpc_soc || '';
           const bpEnt = e.buy_price || '';
           const spEnt = e.sell_price || '';
+          const emHasNet = bpEnt && spEnt && mpGrid;
 
           const iterEnt = mpPv || mpGrid || mpLoad || mpBatt || '';
           if (iterEnt) {
-            let tpl = '';
-            // Load each entity's forecast into a time-keyed dict
-            // PV forecasts (primary iterator)
-            tpl += "{%- set _iter = state_attr('" + iterEnt + "', 'forecasts') or state_attr('" + iterEnt + "', 'battery_scheduled_power') or [] %}\n";
-            tpl += "{%- set ns = namespace(pv={}, grid={}, load={}, batt={}, soc={}, buy={}, sell={}) %}\n";
-            // Build time-keyed lookups for each entity
-            if (mpPv) tpl += "{%- for p in (state_attr('" + mpPv + "', 'forecasts') or []) %}{%- set ns.pv = dict(ns.pv, **{p.date: ((p.mpc_pv_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpGrid) tpl += "{%- for p in (state_attr('" + mpGrid + "', 'forecasts') or []) %}{%- set ns.grid = dict(ns.grid, **{p.date: ((p.mpc_grid_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpLoad) tpl += "{%- for p in (state_attr('" + mpLoad + "', 'forecasts') or []) %}{%- set ns.load = dict(ns.load, **{p.date: ((p.mpc_load_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpBatt) tpl += "{%- for p in (state_attr('" + mpBatt + "', 'battery_scheduled_power') or []) %}{%- set ns.batt = dict(ns.batt, **{p.date: ((p.mpc_batt_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpSoc) tpl += "{%- for p in (state_attr('" + mpSoc + "', 'battery_scheduled_soc') or []) %}{%- set ns.soc = dict(ns.soc, **{p.date: (p.mpc_batt_soc | float(0)) | round(0)}) %}{%- endfor %}\n";
-            if (bpEnt) tpl += "{%- for p in (state_attr('" + bpEnt + "', 'unit_load_cost_forecasts') or []) %}{%- set ns.buy = dict(ns.buy, **{p.date: (p.mpc_general_price | float(0)) | round(4)}) %}{%- endfor %}\n";
-            if (spEnt) tpl += "{%- for p in (state_attr('" + spEnt + "', 'unit_prod_price_forecasts') or []) %}{%- set ns.sell = dict(ns.sell, **{p.date: (p.mpc_feed_in_price | float(0)) | round(4)}) %}{%- endfor %}\n";
-            // Header
-            tpl += "\n| Time |";
-            if (bpEnt) tpl += " Buy " + currency + " |";
-            if (spEnt) tpl += " Sell " + currency + " |";
-            if (mpPv) tpl += " PV kW |";
-            if (mpLoad) tpl += " Load kW |";
-            if (mpGrid) tpl += " Grid kW |";
-            if (mpBatt) tpl += " Batt kW |";
-            if (mpSoc) tpl += " SoC % |";
-            tpl += "\n";
-            tpl += "|:---:|";
-            if (bpEnt) tpl += ":---:|";
-            if (spEnt) tpl += ":---:|";
-            if (mpPv) tpl += ":---:|";
-            if (mpLoad) tpl += ":---:|";
-            if (mpGrid) tpl += ":---:|";
-            if (mpBatt) tpl += ":---:|";
-            if (mpSoc) tpl += ":---:|";
-            tpl += "\n";
-            // Count columns for day divider
-            let emCols = 1; // Time column
+            // Count total columns
+            let emCols = 1; // Time
             if (bpEnt) emCols++;
             if (spEnt) emCols++;
             if (mpPv) emCols++;
@@ -4221,62 +4275,176 @@ return forecast.map(function(d) {
             if (mpGrid) emCols++;
             if (mpBatt) emCols++;
             if (mpSoc) emCols++;
-            // Data rows — past rows dimmed, NOW separator, future rows normal
-            tpl += "{%- set _prevDay = namespace(d='') %}\n";
-            tpl += "{%- set _nowTs = now().timestamp() | int %}\n";
-            tpl += "{%- set _nowShown = namespace(done=false) %}\n";
+            if (emHasNet) emCols++;
+            const emLeftCols = Math.max(1, emCols - 3);
+            const emRightCols = emCols - emLeftCols;
+
+            const _thStyle = "position:sticky; top:0; z-index:2; background:var(--card-background-color); padding:4px 6px; border-bottom:2px solid var(--divider-color); text-align:center; white-space:nowrap; font-size:11px; color:var(--secondary-text-color);";
+            const _tdStyle = "padding:4px 6px; border-bottom:1px solid var(--divider-color); text-align:center; white-space:nowrap;";
+            const _dayStyle = "padding:6px; border-bottom:1px solid var(--divider-color); border-top:2px solid var(--divider-color); font-weight:bold; background:var(--secondary-background-color);";
+
+            let tpl = '';
+            // Load each entity's forecast into a time-keyed dict
+            tpl += "{%- set _iter = state_attr('" + iterEnt + "', 'forecasts') or state_attr('" + iterEnt + "', 'battery_scheduled_power') or [] %}\n";
+            tpl += "{%- set ns = namespace(pv={}, grid={}, load={}, batt={}, soc={}, buy={}, sell={}) %}\n";
+            if (mpPv) tpl += "{%- for p in (state_attr('" + mpPv + "', 'forecasts') or []) %}{%- set ns.pv = dict(ns.pv, **{p.date: ((p.mpc_pv_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpGrid) tpl += "{%- for p in (state_attr('" + mpGrid + "', 'forecasts') or []) %}{%- set ns.grid = dict(ns.grid, **{p.date: ((p.mpc_grid_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpLoad) tpl += "{%- for p in (state_attr('" + mpLoad + "', 'forecasts') or []) %}{%- set ns.load = dict(ns.load, **{p.date: ((p.mpc_load_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpBatt) tpl += "{%- for p in (state_attr('" + mpBatt + "', 'battery_scheduled_power') or []) %}{%- set ns.batt = dict(ns.batt, **{p.date: ((p.mpc_batt_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
+            if (mpSoc) tpl += "{%- for p in (state_attr('" + mpSoc + "', 'battery_scheduled_soc') or []) %}{%- set ns.soc = dict(ns.soc, **{p.date: (p.mpc_batt_soc | float(0)) | round(0)}) %}{%- endfor %}\n";
+            if (bpEnt) tpl += "{%- for p in (state_attr('" + bpEnt + "', 'unit_load_cost_forecasts') or []) %}{%- set ns.buy = dict(ns.buy, **{p.date: (p.mpc_general_price | float(0)) | round(4)}) %}{%- endfor %}\n";
+            if (spEnt) tpl += "{%- for p in (state_attr('" + spEnt + "', 'unit_prod_price_forecasts') or []) %}{%- set ns.sell = dict(ns.sell, **{p.date: (p.mpc_feed_in_price | float(0)) | round(4)}) %}{%- endfor %}\n";
+
+            // Compute per-slot net cost and daily totals
+            if (emHasNet) {
+              tpl += "{%- set ns2 = namespace(daily={}, cur_day='', cur_total=0) %}\n";
+              tpl += "{%- for row in _iter %}\n";
+              tpl += "{%- set dt = row.date %}\n";
+              tpl += "{%- set _day = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
+              tpl += "{%- set _g = ns.grid.get(dt, 0)|float(0) %}\n";
+              tpl += "{%- set _bp = ns.buy.get(dt, 0)|float(0) %}\n";
+              tpl += "{%- set _sp = ns.sell.get(dt, 0)|float(0) %}\n";
+              // EMHASS: grid > 0 = import (buying), grid < 0 = export (selling)
+              tpl += "{%- set _slot_cost = _bp * [_g, 0]|max + _sp * [_g, 0]|min * -1 * -1 %}\n";
+              tpl += "{%- if _day != ns2.cur_day %}\n";
+              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
+              tpl += "{%- set ns2.cur_day = _day %}{%- set ns2.cur_total = _slot_cost %}\n";
+              tpl += "{%- else %}{%- set ns2.cur_total = ns2.cur_total + _slot_cost %}{%- endif %}\n";
+              tpl += "{%- endfor %}\n";
+              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
+            }
+
+            tpl += "{%- set today = now() | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
+            tpl += "{%- set months = ['January','February','March','April','May','June','July','August','September','October','November','December'] %}\n";
+
+            // HTML table start
+            tpl += '<div style="max-height:570px; overflow-y:auto; position:relative;">\n';
+            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px;">\n';
+            tpl += '<thead><tr>\n';
+            tpl += '<th style="' + _thStyle + '">Time</th>\n';
+            if (bpEnt) tpl += '<th style="' + _thStyle + '">Buy ' + currency + '</th>\n';
+            if (spEnt) tpl += '<th style="' + _thStyle + '">Sell ' + currency + '</th>\n';
+            if (mpPv) tpl += '<th style="' + _thStyle + '">PV kW</th>\n';
+            if (mpLoad) tpl += '<th style="' + _thStyle + '">Load kW</th>\n';
+            if (mpGrid) tpl += '<th style="' + _thStyle + '">Grid kW</th>\n';
+            if (mpBatt) tpl += '<th style="' + _thStyle + '">Batt kW</th>\n';
+            if (mpSoc) tpl += '<th style="' + _thStyle + '">SoC %</th>\n';
+            if (emHasNet) tpl += '<th style="' + _thStyle + '">Net ' + currency + '</th>\n';
+            tpl += '</tr></thead>\n';
+
+            // TODAY section — fully expanded
+            tpl += '<tbody>\n';
+            tpl += "{%- set _todayHeader = namespace(shown=false) %}\n";
             tpl += "{%- for row in _iter %}\n";
             tpl += "{%- set dt = row.date %}\n";
-            tpl += "{%- set _tsInt = dt | as_datetime | as_local | as_timestamp | int %}\n";
-            tpl += "{%- set _isPast = _tsInt < (_nowTs - 450) %}\n";
-            tpl += "{%- set _isNow = (_tsInt - _nowTs) | abs < 450 %}\n";
-            tpl += "{%- set _day = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- if _day != _prevDay.d %}{%- set _prevDay.d = _day %}\n";
-            tpl += "| **📅 {{ dt | as_datetime | as_local | as_timestamp | timestamp_custom('%A %d %b') }}** |";
-            for (let i = 1; i < emCols; i++) tpl += " |";
-            tpl += "\n{%- endif %}\n";
-            // Insert NOW separator row before the current timeslot
-            tpl += "{%- if _isNow and not _nowShown.done %}{%- set _nowShown.done = true %}\n";
-            tpl += "| **⏱ NOW** |";
-            for (let i = 1; i < emCols; i++) tpl += " |";
-            tpl += "\n{%- endif %}\n";
-            tpl += "{%- set t = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%H:%M') %}\n";
-            // Past rows: dim all values with grey font. Current/future: normal colors
+            tpl += "{%- set ts = dt | as_datetime | as_local | as_timestamp %}\n";
+            tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
+            tpl += "{%- if _day == today %}\n";
+            tpl += "{%- set _isNow = (ts | int - now().timestamp() | int) | abs < 900 %}\n";
+            tpl += "{%- if not _todayHeader.shown %}{%- set _todayHeader.shown = true %}\n";
+            if (emHasNet) {
+              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
+              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
+              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
+            }
+            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
+            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
+            tpl += '<tr><td colspan="' + emLeftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
+            if (emHasNet) {
+              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
+            } else {
+              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
+            }
+            tpl += '</tr>\n';
+            tpl += "{%- endif %}\n";
+
+            // Data row
+            tpl += "{%- set t = ts | timestamp_custom('%H:%M') %}\n";
+            tpl += "{%- set _isPast = ts | int < (now().timestamp() | int - 450) %}\n";
+            // Value lookups
+            if (bpEnt) tpl += "{%- set _buy_val = ns.buy.get(dt, 0) | float(0) %}\n";
+            if (spEnt) tpl += "{%- set _sell_val = ns.sell.get(dt, 0) | float(0) %}\n";
+            if (mpGrid) tpl += "{%- set _g = ns.grid.get(dt) %}\n";
+            if (mpSoc) tpl += "{%- set _soc_val = ns.soc.get(dt) | float(50) %}\n";
+            if (emHasNet) {
+              tpl += "{%- set _g_f = ns.grid.get(dt, 0)|float(0) %}\n";
+              tpl += "{%- set _nc = ns.buy.get(dt,0)|float(0) * [_g_f, 0]|max + ns.sell.get(dt,0)|float(0) * [_g_f, 0]|min * -1 * -1 %}\n";
+            }
+
+            // Colors
+            if (bpEnt) tpl += "{%- set _buy_color = '#ff2222' if _buy_val >= 0.50 else '#cc6600' if _buy_val >= 0.40 else '#cccc00' if _buy_val >= 0.30 else '#00e5cc' if _buy_val >= 0.20 else '#888888' %}\n";
+            if (spEnt) tpl += "{%- set _sell_color = '#00ff00' if _sell_val >= 0.25 else '#00cc00' if _sell_val >= 0.10 else '#009900' if _sell_val >= 0.05 else '#336633' if _sell_val >= 0.03 else '#888888' %}\n";
+            if (mpGrid) tpl += "{%- set _g_color = '#ff4444' if (_g|float(0)) > 0 else '#00cc00' if (_g|float(0)) < 0 else '#888888' %}\n";
+            if (mpSoc) tpl += "{%- set _soc_color = '#ff4444' if _soc_val <= 20 else '#00cc00' if _soc_val >= 75 else '' %}\n";
+            if (emHasNet) tpl += "{%- set _nc_color = '#00cc00' if _nc < -0.001 else '#ff4444' if _nc > 0.001 else '' %}\n";
+
             tpl += "{%- if _isPast %}\n";
-            tpl += "| <font color='#555'>{{ t }}</font> |";
-            if (bpEnt) tpl += " <font color='#555'>{{ ns.buy.get(dt, '—') }}</font> |";
-            if (spEnt) tpl += " <font color='#555'>{{ ns.sell.get(dt, '—') }}</font> |";
-            if (mpPv) tpl += " <font color='#555'>{{ ns.pv.get(dt, '0') }}</font> |";
-            if (mpLoad) tpl += " <font color='#555'>{{ ns.load.get(dt, '—') }}</font> |";
-            if (mpGrid) tpl += " <font color='#555'>{{ ns.grid.get(dt, '—') }}</font> |";
-            if (mpBatt) tpl += " <font color='#555'>{{ ns.batt.get(dt, '—') }}</font> |";
-            if (mpSoc) tpl += " <font color='#555'>{{ ns.soc.get(dt, '—') }}%</font> |";
-            tpl += "\n{%- elif _isNow %}\n";
-            tpl += "| **{{ t }}** |";
-            if (bpEnt) tpl += " **<font color='red'>{{ ns.buy.get(dt, '—') }}</font>** |";
-            if (spEnt) tpl += " **<font color='green'>{{ ns.sell.get(dt, '—') }}</font>** |";
-            if (mpPv) tpl += " **{%- set _pv = ns.pv.get(dt) %}{{ '<font color=#e8a835>' ~ _pv ~ '</font>' if _pv and _pv != 0 else '<font color=grey>0</font>' if _pv == 0 else '—' }}** |";
-            if (mpLoad) tpl += " **{{ ns.load.get(dt, '—') }}** |";
-            if (mpGrid) tpl += " **{%- set _g = ns.grid.get(dt) %}<font color='{{ 'red' if (_g|float(0)) > 0 else 'green' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font>** |";
-            if (mpBatt) tpl += " **{%- set _b = ns.batt.get(dt) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font>** |";
-            if (mpSoc) tpl += " **{%- set _sc = ns.soc.get(dt)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(dt, '—') }}%</font>** |";
-            tpl += "\n{%- else %}\n";
-            tpl += "| {{ t }} |";
-            if (bpEnt) tpl += " <font color='red'>{{ ns.buy.get(dt, '—') }}</font> |";
-            if (spEnt) tpl += " <font color='green'>{{ ns.sell.get(dt, '—') }}</font> |";
-            if (mpPv) tpl += " {%- set _pv = ns.pv.get(dt) %}{{ '<font color=#e8a835>' ~ _pv ~ '</font>' if _pv and _pv != 0 else '<font color=grey>0</font>' if _pv == 0 else '—' }} |";
-            if (mpLoad) tpl += " {{ ns.load.get(dt, '—') }} |";
-            if (mpGrid) tpl += " {%- set _g = ns.grid.get(dt) %}<font color='{{ 'red' if (_g|float(0)) > 0 else 'green' if (_g|float(0)) < 0 else 'grey' }}'>{{ _g if _g is not none else '—' }}</font> |";
-            if (mpBatt) tpl += " {%- set _b = ns.batt.get(dt) %}<font color='{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }}'>{{ _b if _b is not none else '—' }}</font> |";
-            if (mpSoc) tpl += " {%- set _sc = ns.soc.get(dt)|float(0) %}<font color='{{ 'red' if _sc < 20 else 'orange' if _sc < 40 else '#e8a835' if _sc < 60 else 'green' }}'>{{ ns.soc.get(dt, '—') }}%</font> |";
-            tpl += "\n{%- endif %}";
+            // Past row — dimmed
+            tpl += '<tr style="opacity:0.4;"><td style="' + _tdStyle + '">{{ t }}</td>';
+            if (bpEnt) tpl += '<td style="' + _tdStyle + '">{{ _buy_val }}</td>';
+            if (spEnt) tpl += '<td style="' + _tdStyle + '">{{ _sell_val }}</td>';
+            if (mpPv) tpl += '<td style="' + _tdStyle + '">{{ ns.pv.get(dt, 0) }}</td>';
+            if (mpLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(dt, \'—\') }}</td>';
+            if (mpGrid) tpl += '<td style="' + _tdStyle + '">{{ _g if _g is not none else \'—\' }}</td>';
+            if (mpBatt) tpl += '<td style="' + _tdStyle + '">{{ ns.batt.get(dt, \'—\') }}</td>';
+            if (mpSoc) tpl += '<td style="' + _tdStyle + '">{{ ns.soc.get(dt, \'—\') }}%</td>';
+            if (emHasNet) tpl += "<td style=\"" + _tdStyle + "\">{{ '%+0.4f' | format(_nc) }}</td>";
+            tpl += '</tr>\n';
+
+            tpl += "{%- else %}\n";
+            // Current/future row — colored
+            tpl += "<tr{{ ' style=font-weight:bold;' if _isNow else '' }}>";
+            tpl += '<td style="' + _tdStyle + '">{{ \'▶ \' + t if _isNow else t }}</td>';
+            if (bpEnt) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _buy_color }};">{{ _buy_val }}</span></td>';
+            if (spEnt) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _sell_color }};">{{ _sell_val }}</span></td>';
+            if (mpPv) tpl += "<td style=\"" + _tdStyle + "\">{%- set _pv = ns.pv.get(dt) %}{{ '<span style=color:#e8a835;>' ~ _pv ~ '</span>' if _pv and _pv != 0 else '0' }}</td>";
+            if (mpLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(dt, \'—\') }}</td>';
+            if (mpGrid) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _g_color }};">{{ _g if _g is not none else \'—\' }}</span></td>';
+            if (mpBatt) tpl += "<td style=\"" + _tdStyle + "\">{%- set _b = ns.batt.get(dt) %}<span style=\"color:{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }};\">{{ _b if _b is not none else '—' }}</span></td>";
+            if (mpSoc) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _soc_color }};">{{ ns.soc.get(dt, \'—\') }}%</span></td>';
+            if (emHasNet) tpl += "<td style=\"" + _tdStyle + "\"><span style=\"color:{{ _nc_color }};\">{{ '%+0.4f' | format(_nc) }}</span></td>";
+            tpl += '</tr>\n';
+            tpl += "{%- endif %}\n";
+
+            tpl += "{%- endif %}\n"; // end if _day == today
             tpl += "{%- endfor %}\n";
+            tpl += '</tbody>\n';
+
+            // UPCOMING DAYS — summary rows only
+            tpl += '<tbody>\n';
+            tpl += '<tr><td colspan="' + emCols + '" style="padding:8px 6px 4px 6px; text-align:left; font-size:11px; color:var(--secondary-text-color); letter-spacing:0.05em; border-top:3px solid var(--divider-color);">UPCOMING DAYS</td></tr>\n';
+            tpl += "{%- set _seenDays = namespace(days=[]) %}\n";
+            tpl += "{%- for row in _iter %}\n";
+            tpl += "{%- set dt = row.date %}\n";
+            tpl += "{%- set ts = dt | as_datetime | as_local | as_timestamp %}\n";
+            tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
+            tpl += "{%- if _day != today and _day not in _seenDays.days %}\n";
+            tpl += "{%- set _seenDays.days = _seenDays.days + [_day] %}\n";
+            if (emHasNet) {
+              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
+              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
+              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
+            }
+            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
+            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
+            tpl += '<tr><td colspan="' + emLeftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
+            if (emHasNet) {
+              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
+            } else {
+              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
+            }
+            tpl += '</tr>\n';
+            tpl += "{%- endif %}\n";
+            tpl += "{%- endfor %}\n";
+            tpl += '</tbody>\n';
+
+            tpl += '</table></div>\n';
 
             forecastTableCard = {
-              type: 'markdown',
-              title: '📊 EMHASS Forecast Timeline',
+              type: 'custom:html-template-card',
+              ignore_line_breaks: true,
               content: tpl,
-              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; } ha-card .card-content { max-height: 400px; overflow-y: auto; font-size: 12px; } ha-card table { width: 100%; border-collapse: collapse; } ha-card th { position: sticky; top: 0; background: ' + _ftBg + '; font-size: 11px; color: ' + _ftMuted + '; padding: 4px 6px; border-bottom: 2px solid ' + _ftBorder + '; z-index: 1; } ha-card td { padding: 3px 6px; font-size: 11px; color: ' + _ftText + '; border-bottom: 1px solid ' + _ftBorder + '; text-align: center; }' }
+              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; }' }
             };
           }
         }
@@ -4291,7 +4459,6 @@ return forecast.map(function(d) {
             tap_action: { action: 'call-service', service: 'input_boolean.toggle', service_data: {}, target: { entity_id: 'input_boolean.genergy_forecast_table' } },
             card_mod: { style: 'ha-card { cursor: pointer; background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px 12px ' + "{{ '0 0' if is_state('input_boolean.genergy_forecast_table', 'on') else '12px 12px' }}" + ' !important; margin-bottom: 0 !important; padding-bottom: 0 !important; }' }
           };
-          delete forecastTableCard.title;
           forecastTableCard.card_mod.style = forecastTableCard.card_mod.style.replace('border-radius: 12px', 'border-radius: 0 0 12px 12px; border-top: none');
           ftConditionalCard = {
             type: 'conditional',

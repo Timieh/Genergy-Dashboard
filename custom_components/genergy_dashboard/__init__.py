@@ -26,6 +26,7 @@ REQUIRED_HACS_CARDS: list[tuple[str, str, str, str, str]] = [
     ("sankey-chart", "Sankey Chart Card", "sankey-chart", "MindFreeze", "ha-sankey-chart"),
     ("mushroom", "Mushroom Cards", "mushroom", "piitaya", "lovelace-mushroom"),
     ("card-mod", "Card Mod", "card-mod", "thomasloven", "lovelace-card-mod"),
+    ("html-template-card", "HTML Template Card", "html-template-card", "nicufarmache", "lovelace-html-template-card"),
 ]
 
 
@@ -197,6 +198,52 @@ async def _check_prerequisites(hass: HomeAssistant) -> None:
         pass  # Older HA version without issue registry
 
 
+async def _ensure_forecast_table_toggle(hass: HomeAssistant) -> None:
+    """Create input_boolean.genergy_forecast_table if it doesn't exist."""
+    entity_id = "input_boolean.genergy_forecast_table"
+    if hass.states.get(entity_id) is not None:
+        return  # Already exists (YAML-defined or storage-based)
+
+    try:
+        from homeassistant.helpers import entity_registry as er
+
+        # Also check entity registry (may exist but be disabled)
+        registry = er.async_get(hass)
+        if registry.async_get(entity_id) is not None:
+            return
+
+        # Create via input_boolean storage collection
+        ib_component = hass.data.get("input_boolean")
+        if ib_component is None:
+            _LOGGER.debug("Genergy Dashboard: input_boolean component not loaded yet")
+            return
+
+        # HA stores the collection in hass.data["input_boolean"]
+        # The collection object has async_create_item
+        collection = None
+        if hasattr(ib_component, "async_create_item"):
+            collection = ib_component
+        elif isinstance(ib_component, dict):
+            collection = ib_component.get("collection")
+
+        if collection is None:
+            _LOGGER.debug("Genergy Dashboard: Cannot access input_boolean collection")
+            return
+
+        await collection.async_create_item({
+            "name": "Genergy Forecast Table",
+            "initial": False,
+            "icon": "mdi:table-clock",
+        })
+        _LOGGER.info("Genergy Dashboard: Created %s", entity_id)
+    except Exception as err:
+        _LOGGER.warning(
+            "Genergy Dashboard: Could not auto-create %s: %s. "
+            "Create it manually via Settings > Devices & Services > Helpers.",
+            entity_id, err,
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Genergy Dashboard from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -217,6 +264,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Install bundled theme
     await hass.async_add_executor_job(_install_theme, hass)
+
+    # Ensure input_boolean.genergy_forecast_table exists
+    await _ensure_forecast_table_toggle(hass)
 
     # Create or update the Lovelace dashboard
     # Run dashboard generation (contains file I/O) off the event loop
