@@ -2,6 +2,24 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.18.2] - 2026-06-17
+
+### Added
+- **Smart Load Monitoring Card** — New `sigenergy-smart-load-card` custom element displaying auto-detected appliance power consumption in a responsive grid. 24 appliance types with multilingual keyword matching, auto-classification by entity name, real-time power display with animated icons
+- **Smart Load Auto-Detect** — Automatically finds power sensors for appliances (dishwasher, washing machine, dryer, fridge, oven, etc.) by filtering out system sensors (inverter, battery, grid, solar, EMHASS). Configurable on the Features tab
+- **Smart Load Entity Autocomplete** — Entity input fields for smart loads now feature autocomplete dropdown (search by name or entity_id, shows friendly name + current value)
+- **Include EMS Loads Toggle** — Optional toggle on Features tab to include entities already assigned as Heat Pump, Boiler, or Deferrable Loads in the EMS config in auto-detect results
+
+### Fixed
+- **html-template-card HACS Install Link** — Corrected the HACS repository owner/name from `nicufarmache/lovelace-html-template-card` (non-existent) to `PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card`. The prerequisite banner now links to the correct repository (fixes install error on fresh setups)
+- **Grid Frequency Missing from Sigenergy Defaults** — When using "Use Sigenergy Default Sensors", the Grid Frequency field was left empty. Now defaults to `sensor.sigen_inverter_grid_frequency` which is the correct inverter-level entity from Sigenergy Local Modbus
+
+### Changed
+- **README Prerequisites Table** — Added HTML Jinja2 Template Card to the required HACS plugins table with correct install link
+
+### Thanks
+- **@Roving-Ronin** for reporting both the broken HACS install link and the missing grid frequency default
+
 ## [2.18.1] - 2026-06-17
 
 ### Fixed

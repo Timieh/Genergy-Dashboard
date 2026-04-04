@@ -18,6 +18,8 @@ const _SIGENERGY_SCRIPT_URL = import.meta.url;
 const _SIGENERGY_SCRIPT_DIR = new URL('.', _SIGENERGY_SCRIPT_URL).pathname.replace('/js/', '/frontend/');
 
 // House card auto-load is deferred until after SigConfigStore is initialised (see below)
+// Smart load card auto-load
+import('./sigenergy-smart-load-card.js').catch(e => console.warn('Smart load card import failed:', e));
 
 // ═══════════════════════════════════════════════════════════
 // Config Store (singleton)
@@ -172,12 +174,18 @@ const DEFAULT_CONFIG = {
     dual_tariff: false,
     show_ev_in_sankey: false,
     show_hp_in_sankey: false,
+    show_losses_in_sankey: true,
     ev_energy_is_cumulative: false,
     hp_energy_is_cumulative: false,
     battery_positive_charging: true,
     battery_runtime: true,
     pv_strings: 2,
+    smart_loads: false,
+    smart_load_columns: 4,
+    smart_load_sort: 'power',
+    smart_load_standby_threshold: 5,
   },
+  smart_loads: [],
   pricing: {
     source: 'custom',
     cheap_threshold: 0.10,
@@ -1286,6 +1294,15 @@ class SigenergySettingsCard extends HTMLElement {
           ` : ''}
         </div>
       </div>
+      <div class="section" style="border:1px solid ${cfg.features?.show_losses_in_sankey ? '#555' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:${cfg.features?.show_losses_in_sankey ? '#aaa' : '#8892a4'};">📉 Show Losses in Sankey Graph</div>
+            <div style="font-size:10px;color:#8892a4;margin-top:1px;">Display conversion/distribution losses as a destination node in the energy flow chart</div>
+          </div>
+          <div class="switch ${cfg.features?.show_losses_in_sankey ? 'on' : 'off'}" data-key="show_losses_in_sankey_toggle" style="flex-shrink:0;margin-left:12px;"></div>
+        </div>
+      </div>
       <div class="section" style="border:1px solid ${cfg.features?.solar_forecast ? '#FFA500' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${cfg.features?.solar_forecast ? '12' : '0'}px;">
           <div>
@@ -1552,6 +1569,22 @@ class SigenergySettingsCard extends HTMLElement {
         if (this._hass) {
           this._buildDashboard().then(ok => {
             if (ok) console.log('Dashboard rebuilt after toggling HP Sankey');
+            this._render();
+          }).catch(() => this._render());
+        } else { this._render(); }
+      });
+    }
+
+    // Losses in Sankey toggle handler
+    const lossesSankeyToggle = el.querySelector('[data-key="show_losses_in_sankey_toggle"]');
+    if (lossesSankeyToggle) {
+      lossesSankeyToggle.addEventListener('click', () => {
+        const cfg2 = this._storeGet();
+        cfg2.features.show_losses_in_sankey = !cfg2.features.show_losses_in_sankey;
+        this._storeSave(cfg2);
+        if (this._hass) {
+          this._buildDashboard().then(ok => {
+            if (ok) console.log('Dashboard rebuilt after toggling Losses Sankey');
             this._render();
           }).catch(() => this._render());
         } else { this._render(); }
@@ -2928,6 +2961,39 @@ class SigenergySettingsCard extends HTMLElement {
         </div>
       </div>
       <div class="section">
+        <div class="section-title">⚡ Smart Load Monitoring</div>
+        <div style="font-size:10px;color:#666;margin-bottom:6px;">Track individual appliance power consumption. Enable the feature, then add loads below or use Auto-Detect to find power sensors.</div>
+        ${this._toggleHtml('Smart Loads', 'Show a grid of individual appliance tiles with real-time power and daily energy', 'smart_loads', f.smart_loads)}
+        ${f.smart_loads ? `
+          ${this._toggleHtml('Include EMS Loads', 'Also detect entities already assigned as Heat Pump, Boiler, or Deferrable Loads in the EMS/Entities config', 'smart_load_include_ems', f.smart_load_include_ems)}
+          <div style="margin-top:8px;">
+            <div class="row">
+              <span class="row-label" style="font-size:12px;color:#8892a4;">Grid Columns</span>
+              <input class="row-input smart-load-setting" type="number" min="2" max="6" value="${f.smart_load_columns || 4}" data-sl-key="smart_load_columns" style="width:60px;" />
+            </div>
+            <div class="row" style="margin-top:4px;">
+              <span class="row-label" style="font-size:12px;color:#8892a4;">Sort By</span>
+              <select class="row-input smart-load-setting" data-sl-key="smart_load_sort" style="width:100px;background:#1a1f2e;color:#fff;border:1px solid #2d3451;border-radius:6px;padding:4px;">
+                <option value="power" ${(f.smart_load_sort||'power')==='power'?'selected':''}>Power ↓</option>
+                <option value="energy" ${f.smart_load_sort==='energy'?'selected':''}>Energy ↓</option>
+                <option value="name" ${f.smart_load_sort==='name'?'selected':''}>Name A-Z</option>
+              </select>
+            </div>
+            <div class="row" style="margin-top:4px;">
+              <span class="row-label" style="font-size:12px;color:#8892a4;">Standby Threshold (W)</span>
+              <input class="row-input smart-load-setting" type="number" min="1" max="50" value="${f.smart_load_standby_threshold || 5}" data-sl-key="smart_load_standby_threshold" style="width:60px;" />
+            </div>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:6px;">
+            <button class="action-btn" id="sl-auto-detect" style="flex:1;padding:8px;background:rgba(0,212,184,0.12);border:1px solid rgba(0,212,184,0.3);border-radius:8px;color:#00d4b8;font-size:11px;font-weight:600;cursor:pointer;">🔍 Auto-Detect Loads</button>
+            <button class="action-btn" id="sl-add-manual" style="flex:1;padding:8px;background:rgba(63,81,181,0.12);border:1px solid rgba(63,81,181,0.3);border-radius:8px;color:#7c8cf8;font-size:11px;font-weight:600;cursor:pointer;">➕ Add Manual</button>
+          </div>
+          <div id="sl-load-list" style="margin-top:10px;">
+            ${this._renderSmartLoadList(cfg)}
+          </div>
+        ` : ''}
+      </div>
+      <div class="section">
         <div class="section-title">🛠️ Developer</div>
         ${this._toggleHtml('Cable Path Editor', 'Drag-to-position cable routing overlay on house card (for layout customization)', 'path_editor', this._pathEditorOn)}
       </div>
@@ -3043,6 +3109,299 @@ class SigenergySettingsCard extends HTMLElement {
         this._syncSocTargetsToDashboard(cfg2);
       });
     }
+
+    // Smart Load settings bindings
+    el.querySelectorAll('.smart-load-setting').forEach(input => {
+      const handler = () => {
+        const cfg2 = this._storeGet();
+        const key = input.dataset.slKey;
+        if (input.type === 'number') {
+          cfg2.features[key] = parseInt(input.value) || parseInt(input.min) || 4;
+        } else {
+          cfg2.features[key] = input.value;
+        }
+        this._storeSave(cfg2);
+      };
+      input.addEventListener('change', handler);
+    });
+
+    // Smart Load auto-detect button
+    const slAutoBtn = el.querySelector('#sl-auto-detect');
+    if (slAutoBtn) {
+      slAutoBtn.addEventListener('click', async () => {
+        slAutoBtn.textContent = '⏳ Detecting...';
+        slAutoBtn.disabled = true;
+        try {
+          const detected = await this._autoDetectSmartLoads();
+          if (detected.length === 0) {
+            slAutoBtn.textContent = '✅ No new loads found';
+            setTimeout(() => { slAutoBtn.textContent = '🔍 Auto-Detect Loads'; slAutoBtn.disabled = false; }, 2000);
+            return;
+          }
+          const cfg2 = this._storeGet();
+          if (!cfg2.smart_loads) cfg2.smart_loads = [];
+          const existingPower = new Set(cfg2.smart_loads.map(l => l.entity_power));
+          let added = 0;
+          for (const load of detected) {
+            if (!existingPower.has(load.entity_power)) {
+              cfg2.smart_loads.push(load);
+              existingPower.add(load.entity_power);
+              added++;
+            }
+          }
+          this._storeSave(cfg2);
+          slAutoBtn.textContent = `✅ Added ${added} load${added !== 1 ? 's' : ''}`;
+          setTimeout(() => { slAutoBtn.textContent = '🔍 Auto-Detect Loads'; slAutoBtn.disabled = false; }, 2000);
+          // Rebuild the load list
+          const listEl = el.querySelector('#sl-load-list');
+          if (listEl) { listEl.innerHTML = this._renderSmartLoadList(cfg2); this._bindSmartLoadListEvents(el); this._bindSmartLoadEntityAutocomplete(el); }
+          // Rebuild dashboard to add smart load card
+          if (this._hass) this._buildDashboard();
+        } catch (e) {
+          console.error('Smart load auto-detect failed:', e);
+          slAutoBtn.textContent = '❌ Error';
+          setTimeout(() => { slAutoBtn.textContent = '🔍 Auto-Detect Loads'; slAutoBtn.disabled = false; }, 2000);
+        }
+      });
+    }
+
+    // Smart Load manual add button
+    const slAddBtn = el.querySelector('#sl-add-manual');
+    if (slAddBtn) {
+      slAddBtn.addEventListener('click', () => {
+        const cfg2 = this._storeGet();
+        if (!cfg2.smart_loads) cfg2.smart_loads = [];
+        cfg2.smart_loads.push({
+          id: 'load_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          entity_power: '',
+          entity_energy: '',
+          type: 'plug_socket',
+          label: 'New Load',
+          show_in_sankey: false,
+        });
+        this._storeSave(cfg2);
+        const listEl = el.querySelector('#sl-load-list');
+        if (listEl) {
+          listEl.innerHTML = this._renderSmartLoadList(cfg2);
+          this._bindSmartLoadListEvents(el);
+          this._bindSmartLoadEntityAutocomplete(el);
+          // Scroll to and focus the newly added item
+          const newItem = listEl.querySelector(`.sl-item[data-idx="${cfg2.smart_loads.length - 1}"]`);
+          if (newItem) {
+            newItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            const labelInput = newItem.querySelector('.sl-label');
+            if (labelInput) { labelInput.focus(); labelInput.select(); }
+          }
+        }
+        // Rebuild dashboard to include new load
+        if (this._hass) this._buildDashboard();
+      });
+    }
+
+    // Bind existing smart load list events
+    this._bindSmartLoadListEvents(el);
+    this._bindSmartLoadEntityAutocomplete(el);
+  }
+
+  _renderSmartLoadList(cfg) {
+    const loads = cfg.smart_loads || [];
+    if (!loads.length) {
+      return '<div style="font-size:11px;color:#666;text-align:center;padding:12px;">No smart loads configured. Use Auto-Detect or Add Manual.</div>';
+    }
+    const types = window.__sigApplianceTypes || [];
+    const imgBase = _SIGENERGY_SCRIPT_DIR + 'images/smart_load/';
+    return loads.map((load, idx) => `
+      <div class="sl-item" data-idx="${idx}" style="display:flex;align-items:center;gap:8px;padding:8px;margin-bottom:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(92,156,230,0.12);border-radius:8px;">
+        <img src="${imgBase}${load.type || 'plug_socket'}_mid.png" style="width:28px;height:28px;object-fit:contain;" onerror="this.src='${imgBase}plug_socket_mid.png'" />
+        <div style="flex:1;min-width:0;">
+          <input class="sl-label" data-idx="${idx}" value="${(load.label || '').replace(/"/g, '&quot;')}" placeholder="Label" style="width:100%;border:none;background:transparent;color:#fff;font-size:12px;font-weight:600;outline:none;" />
+          <div class="entity-input-wrap" style="position:relative;">
+            <input class="sl-entity" data-idx="${idx}" value="${load.entity_power || ''}" placeholder="sensor.xxx_power — type to search" autocomplete="off" style="width:100%;border:none;background:transparent;color:#8892a4;font-size:10px;outline:none;margin-top:2px;" />
+            <div class="entity-dropdown sl-entity-dropdown" data-dropdown-idx="${idx}"></div>
+          </div>
+        </div>
+        <select class="sl-type" data-idx="${idx}" style="width:80px;background:#1a1f2e;color:#8892a4;border:1px solid #2d3451;border-radius:4px;font-size:10px;padding:2px;">
+          ${types.map(t => `<option value="${t.id}" ${load.type === t.id ? 'selected' : ''}>${t.label}</option>`).join('')}
+        </select>
+        <button class="sl-delete" data-idx="${idx}" style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:16px;padding:4px;">✕</button>
+      </div>
+    `).join('');
+  }
+
+  _bindSmartLoadListEvents(el) {
+    // Label changes
+    el.querySelectorAll('.sl-label').forEach(input => {
+      input.addEventListener('change', () => {
+        const cfg2 = this._storeGet();
+        const idx = parseInt(input.dataset.idx);
+        if (cfg2.smart_loads?.[idx]) {
+          cfg2.smart_loads[idx].label = input.value;
+          this._storeSave(cfg2);
+        }
+      });
+    });
+    // Entity changes
+    el.querySelectorAll('.sl-entity').forEach(input => {
+      input.addEventListener('change', () => {
+        const cfg2 = this._storeGet();
+        const idx = parseInt(input.dataset.idx);
+        if (cfg2.smart_loads?.[idx]) {
+          cfg2.smart_loads[idx].entity_power = input.value;
+          this._storeSave(cfg2);
+          if (this._hass) this._buildDashboard();
+        }
+      });
+    });
+    // Type selector changes
+    el.querySelectorAll('.sl-type').forEach(select => {
+      select.addEventListener('change', () => {
+        const cfg2 = this._storeGet();
+        const idx = parseInt(select.dataset.idx);
+        if (cfg2.smart_loads?.[idx]) {
+          cfg2.smart_loads[idx].type = select.value;
+          this._storeSave(cfg2);
+          // Update the icon
+          const itemEl = select.closest('.sl-item');
+          if (itemEl) {
+            const img = itemEl.querySelector('img');
+            if (img) img.src = _SIGENERGY_SCRIPT_DIR + 'images/smart_load/' + select.value + '_mid.png';
+          }
+        }
+      });
+    });
+    // Delete buttons
+    el.querySelectorAll('.sl-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cfg2 = this._storeGet();
+        const idx = parseInt(btn.dataset.idx);
+        if (cfg2.smart_loads?.[idx]) {
+          cfg2.smart_loads.splice(idx, 1);
+          this._storeSave(cfg2);
+          const listEl = el.querySelector('#sl-load-list');
+          if (listEl) { listEl.innerHTML = this._renderSmartLoadList(cfg2); this._bindSmartLoadListEvents(el); this._bindSmartLoadEntityAutocomplete(el); }
+          if (this._hass) this._buildDashboard();
+        }
+      });
+    });
+  }
+
+  _bindSmartLoadEntityAutocomplete(el) {
+    if (!this._hass || !this._hass.states) return;
+    const allEntityIds = Object.keys(this._hass.states);
+    const closeAllSLDropdowns = () => {
+      el.querySelectorAll('.sl-entity-dropdown.open').forEach(d => d.classList.remove('open'));
+    };
+    el.querySelectorAll('.sl-entity').forEach(input => {
+      const wrap = input.closest('.entity-input-wrap');
+      const dropdown = wrap ? wrap.querySelector('.sl-entity-dropdown') : null;
+      if (!dropdown) return;
+      const showDropdown = (filter) => {
+        const q = (filter || '').toLowerCase();
+        if (!q || q.length < 2) { dropdown.classList.remove('open'); return; }
+        const matches = allEntityIds.filter(k => {
+          const st = this._hass.states[k];
+          const fn = (st?.attributes?.friendly_name || '').toLowerCase();
+          return k.toLowerCase().includes(q) || fn.includes(q);
+        }).slice(0, 40);
+        if (matches.length === 0) { dropdown.classList.remove('open'); return; }
+        dropdown.innerHTML = matches.map(k => {
+          const st = this._hass.states[k];
+          const fn = st?.attributes?.friendly_name || '';
+          const val = st?.state || '';
+          const uom = st?.attributes?.unit_of_measurement || '';
+          return '<div class="entity-dropdown-item" data-eid="' + this._esc(k) + '"><span class="entity-name">' + this._esc(k) + '</span>' + (fn ? ' <span class="entity-state">' + this._esc(fn) + '</span>' : '') + ' <span class="entity-state">= ' + this._esc(val) + (uom ? ' ' + this._esc(uom) : '') + '</span></div>';
+        }).join('');
+        dropdown.classList.add('open');
+        dropdown.querySelectorAll('.entity-dropdown-item').forEach(item => {
+          item.addEventListener('mousedown', (ev) => {
+            ev.preventDefault();
+            input.value = item.dataset.eid;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            closeAllSLDropdowns();
+          });
+        });
+      };
+      input.addEventListener('focus', () => showDropdown(input.value));
+      input.addEventListener('input', () => showDropdown(input.value));
+      input.addEventListener('blur', () => { setTimeout(closeAllSLDropdowns, 200); });
+    });
+  }
+
+  async _autoDetectSmartLoads() {
+    if (!this._hass) return [];
+    const allStates = this._hass.states;
+    const cfg = this._storeGet();
+    const includeEms = cfg.features?.smart_load_include_ems;
+
+    // Entity keys that represent actual end-device power (not system-level)
+    const emsLoadKeys = new Set(['heat_pump_power', 'deferrable0_power', 'deferrable1_power', 'ev_charger_power']);
+
+    // Gather all entities already assigned to core/system roles
+    const assignedEntities = new Set();
+    const entities = cfg.entities || {};
+    for (const [key, val] of Object.entries(entities)) {
+      if (val && typeof val === 'string' && val.startsWith('sensor.')) {
+        // When includeEms is on, don't exclude EMS load entities from detection
+        if (includeEms && emsLoadKeys.has(key)) continue;
+        assignedEntities.add(val);
+      }
+    }
+    // Also exclude already-configured smart loads
+    for (const load of (cfg.smart_loads || [])) {
+      if (load.entity_power) assignedEntities.add(load.entity_power);
+      if (load.entity_energy) assignedEntities.add(load.entity_energy);
+    }
+
+    const classify = window.__sigClassifyByName || ((name) => 'plug_socket');
+
+    // System-level entity ID patterns to exclude
+    const systemIdRegex = /(inverter|battery|grid|solar|pv[\d_]|mpc_|emhass|solcast|capaciteit|peak_|yambms|plant|sigen_|photovoltaic|deferr|slimmeleze|_no_var_|home_power|house.load|total.power|net.power|remain|forecast|cost_|price_|tarif|production|all_standby|home_consumption|home_total|total_consumption|essential_load|non_essential_load|grid_load|load_power$|daily_load)/;
+    // System-level friendly name patterns to exclude
+    const systemFnRegex = /(slimmeleze|p1.meter|energy.meter|smart.meter|home.?power|net.?power|home.?consumption|total.?(power|consumption|load)|essential.?load|grid.?load)/i;
+
+    // Find candidate power sensors
+    const candidates = [];
+    for (const [entityId, state] of Object.entries(allStates)) {
+      if (!entityId.startsWith('sensor.')) continue;
+      if (assignedEntities.has(entityId)) continue;
+      const uom = state.attributes?.unit_of_measurement;
+      const dc = state.attributes?.device_class;
+      if (!((dc === 'power') || uom === 'W' || uom === 'kW')) continue;
+      // Exclude system-level sensors (inverters, battery, grid, solar, EMHASS, meters, photovoltaics, etc.)
+      if (systemIdRegex.test(entityId.toLowerCase())) continue;
+      // Skip generic meter entity IDs (P1 meter: power_consumed, power_produced, and their phases)
+      if (/^sensor\.(power_consumed|power_produced)/.test(entityId)) continue;
+      // Skip entities with hex addresses (Zigbee devices without friendly names)
+      if (/0x[0-9a-f]{10,}/.test(entityId.toLowerCase())) continue;
+      // Skip entities whose friendly name looks like a raw address or is a known system name
+      const fn = state.attributes?.friendly_name || '';
+      if (/^0x[0-9a-f]{10,}/i.test(fn)) continue;
+      if (systemFnRegex.test(fn)) continue;
+      candidates.push([entityId, state]);
+    }
+
+    return candidates.map(([entityId, state]) => {
+      const friendlyName = state.attributes?.friendly_name || entityId;
+      const type = classify(friendlyName);
+
+      // Try to find a matching energy sensor
+      const baseName = entityId.replace(/_power$/, '');
+      const energyCandidates = [baseName + '_energy', baseName + '_consumption', baseName + '_kwh',
+                                 baseName + '_energy_today', baseName + '_daily_energy'];
+      const energyEntity = energyCandidates.find(e => e in allStates) || '';
+
+      return {
+        id: 'load_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        entity_power: entityId,
+        entity_energy: energyEntity,
+        type,
+        label: friendlyName
+          .replace(/\s*(Vermogen|Power|Puissance|Leistung|Watt|Consumed|Produced|Phase\s*\d*)\s*/gi, '')
+          .replace(/_/g, ' ')
+          .trim() || entityId.split('.')[1].replace(/_power$/, '').replace(/_/g, ' '),
+        show_in_sankey: false,
+      };
+    });
   }
 
   async _syncBatteryCapacityKwhToDashboard(value) {
@@ -4126,8 +4485,8 @@ return forecast.map(function(d) {
             tpl += "{%- set months = ['January','February','March','April','May','June','July','August','September','October','November','December'] %}\n";
 
             // HTML table start
-            tpl += '<div style="max-height:570px; overflow-y:auto; overflow-x:hidden; position:relative;">\n';
-            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px; table-layout:fixed;">\n';
+            tpl += '<div style="max-height:570px; overflow-y:auto; position:relative;">\n';
+            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px;">\n';
             tpl += '<thead><tr>\n';
             tpl += '<th style="' + _thStyle + '">Time</th>\n';
             if (hImpP) tpl += '<th style="' + _thStyle + '">Buy ' + currency + '</th>\n';
@@ -4318,8 +4677,8 @@ return forecast.map(function(d) {
             tpl += "{%- set months = ['January','February','March','April','May','June','July','August','September','October','November','December'] %}\n";
 
             // HTML table start
-            tpl += '<div style="max-height:570px; overflow-y:auto; overflow-x:hidden; position:relative;">\n';
-            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px; table-layout:fixed;">\n';
+            tpl += '<div style="max-height:570px; overflow-y:auto; position:relative;">\n';
+            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px;">\n';
             tpl += '<thead><tr>\n';
             tpl += '<th style="' + _thStyle + '">Time</th>\n';
             if (bpEnt) tpl += '<th style="' + _thStyle + '">Buy ' + currency + '</th>\n';
@@ -4522,16 +4881,44 @@ return forecast.map(function(d) {
 
       // Build source children arrays — sources can flow to all destinations
       // ha-sankey-chart uses greedy allocation: first child claims energy first.
-      // Put small consumers (EV, HP) before large ones (Home, Grid Export) so they
-      // get visible flow lines even when larger destinations would consume everything.
+      // For small consumers (HP/EV), use connection_entity_id to force proportional
+      // multi-source flows (like the Sigenergy app shows). Each source→HP/EV connection
+      // gets a fake entity whose state is calculated proportionally by the runtime IIFE.
       const _gridExportChild = _gridExportId || e.grid_export_today;
-      const _smallConsumers = [];
-      if (f.show_ev_in_sankey && evSankeyEntity) _smallConsumers.push(evSankeyEntity);
-      if (f.show_hp_in_sankey && hpSankeyEntity) _smallConsumers.push(hpSankeyEntity);
+      // Small consumers as simple entity_ids (for destination section)
+      const _smallConsumerIds = [];
+      if (f.show_ev_in_sankey && evSankeyEntity) _smallConsumerIds.push(evSankeyEntity);
+      if (f.show_hp_in_sankey && hpSankeyEntity) _smallConsumerIds.push(hpSankeyEntity);
 
-      const battDischargeChildren = [..._smallConsumers, e.load_energy_today, _gridExportChild].filter(Boolean);
-      const solarChildren = [e.battery_charge_today, ..._smallConsumers, e.load_energy_today, _gridExportChild].filter(Boolean);
-      const gridImportChildren = [e.battery_charge_today, ..._smallConsumers, e.load_energy_today].filter(Boolean);
+      // Small consumers with connection_entity_id for proportional source allocation
+      // _conn_<src>_<dest> entities are injected by the runtime IIFE at render time
+      const _smallConsForSolar = [];
+      const _smallConsForBat = [];
+      const _smallConsForGrid = [];
+      if (f.show_hp_in_sankey && hpSankeyEntity) {
+        _smallConsForSolar.push({ entity_id: hpSankeyEntity, connection_entity_id: '_conn_solar_to_hp' });
+        _smallConsForBat.push({ entity_id: hpSankeyEntity, connection_entity_id: '_conn_bat_to_hp' });
+        _smallConsForGrid.push({ entity_id: hpSankeyEntity, connection_entity_id: '_conn_grid_to_hp' });
+      }
+      if (f.show_ev_in_sankey && evSankeyEntity) {
+        _smallConsForSolar.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_solar_to_ev' });
+        _smallConsForBat.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_bat_to_ev' });
+        _smallConsForGrid.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_grid_to_ev' });
+      }
+
+      // remaining_parent_state virtual child — only used when losses toggle is ON.
+      // When ON, absorbs unaccounted state so flow paths fill the entire source box.
+      // When OFF, completely omitted — no losses entity, no flow, no solid bar inflating.
+      const _remLosses = f.show_losses_in_sankey ? '_sankey_losses' : null;
+
+      // Children order matters: ha-sankey-chart uses greedy sequential allocation
+      // (first child claims energy first). Order by descending energy share from each
+      // source so the visual flows better approximate proportional allocation.
+      // Small consumers use connection_entity_id for accurate multi-source distribution.
+      // _remLosses (when present) always last — absorbs whatever is left over.
+      const battDischargeChildren = [e.load_energy_today, _gridExportChild, ..._smallConsForBat, _remLosses].filter(Boolean);
+      const solarChildren = [e.battery_charge_today, e.load_energy_today, _gridExportChild, ..._smallConsForSolar, _remLosses].filter(Boolean);
+      const gridImportChildren = [e.load_energy_today, e.battery_charge_today, ..._smallConsForGrid, _remLosses].filter(Boolean);
 
       // Grid import source — prefer the non-tariff total entity for accurate Sankey sizing.
       // Only fall back to tariff add_entities summation when grid_import_today is missing.
@@ -4552,11 +4939,12 @@ return forecast.map(function(d) {
         type: 'custom:sankey-chart',
         layout: 'horizontal',
         show_names: true, show_states: true, show_units: true, show_icons: false,
-        round: 1, height: 500, wide: true,
-        min_box_size: 30, min_box_distance: 5, unit_prefix: 'k',
+        round: 1, height: 480, wide: true,
+        min_box_size: 50, min_box_distance: 8, unit_prefix: 'k',
         min_state: 0.01,
         throttle: 10000,
         energy_date_selection: false,
+        ignore_missing_entities: true,
         sections: [
           {
             // Order matters! ha-sankey-chart uses greedy allocation (first source claims
@@ -4569,7 +4957,12 @@ return forecast.map(function(d) {
             ].filter(x => x.entity_id)
           },
           {
-            entities: sankeyDest.filter(x => x.entity_id)
+            entities: [
+              ...sankeyDest.filter(x => x.entity_id),
+              // remaining_parent_state: only present when losses toggle is ON.
+              // When OFF, completely omitted — no entity, no flow path, no destination box.
+              ...(f.show_losses_in_sankey ? [{ entity_id: '_sankey_losses', type: 'remaining_parent_state', name: 'Losses', color: '#555' }] : [])
+            ]
           }
         ],
         card_mod: sankeyOld.card_mod || {}
@@ -4619,9 +5012,14 @@ return forecast.map(function(d) {
       if (f.show_hp_in_sankey && hpSankeyEntity) {
         jinjaHost += "  --pct-dst-hp: \"{{ '%0.2f' | format((hp/dst*100) if dst > 0 else 0) }}%\";\n";
       }
+      jinjaHost += "  --pct-losses: \"{{ '%0.2f' | format(((src - dst)/src*100) if src > dst and src > 0 else 0) }}%\";\n";
       jinjaHost += "}\n";
 
-      // Fix sankey CSS: strip old :host block + accumulated layout rules, then prepend fresh Jinja
+      // Always rebuild sankey CSS from scratch to ensure consistency
+      // Delete existing CSS so the from-scratch path always runs
+      if (sankeyChart.card_mod?.style?.['sankey-chart-base$']) {
+        delete sankeyChart.card_mod.style['sankey-chart-base$'];
+      }
       if (sankeyChart.card_mod?.style?.['sankey-chart-base$']) {
         let css = sankeyChart.card_mod.style['sankey-chart-base$'];
         // Remove ALL old Jinja :host blocks (can accumulate from repeated builds).
@@ -4698,20 +5096,20 @@ return forecast.map(function(d) {
         css = css.replace(/path\[fill-opacity\]\s*\{[^}]*\}\n?/g, '');
         css = css.replace(/path\[fill-opacity="[^"]*"\]\s*\{[^}]*\}\n?/g, '');
         css = css.replace(/path\s*\{\s*transition:[^}]*\}\n?/g, '');
-        // Remove old box cursor/transition/overflow/min-height rules to avoid duplication
+        // Remove old box cursor/transition rules to avoid duplication
         css = css.replace(/\.box\s*\{\s*cursor:[^}]*\}\n?/g, '');
         css = css.replace(/\.box\s*\{\s*transition:\s*height[^}]*\}\n?/g, '');
         css = css.replace(/\.spacerv\s*\{\s*transition:\s*height[^}]*\}\n?/g, '');
-        css = css.replace(/\.box\s*\{\s*overflow:\s*(hidden|visible)[^}]*\}\n?/g, '');
+        // Remove old remaining_parent_state rules to avoid duplication
+        css = css.replace(/\.box\.type-remaining_parent_state\s*\{[^}]*\}\n?/g, '');
         // Remove broken ha-card rules (e.g. "ha-card { --ha-card- overflow...")
         css = css.replace(/\n?ha-card\s*\{\s*--ha-card-\s+overflow[^}]*\}\n?/g, '');
         // Add smooth transition and opacity levels for hover highlighting
-        css += 'path { transition: fill-opacity 0.3s ease !important; fill-opacity: 0.55 !important; }\n';
-        css += 'path:hover { fill-opacity: 0.85 !important; }\n';
-        css += 'path[fill-opacity="0.4"] { fill-opacity: 0.55 !important; }\n';
+        css += 'path { transition: fill-opacity 0.3s ease !important; }\n';
+        css += 'path[fill-opacity="0.4"] { fill-opacity: 0.6 !important; }\n';
         css += 'path[fill-opacity="0.85"] { fill-opacity: 0.95 !important; }\n';
         // Make entire box area hoverable (not just the colored strip)
-        css += '.box { cursor: pointer !important; min-height: 30px !important; overflow: visible !important; }\n';
+        css += '.box { cursor: pointer !important; }\n';
         // Reduce box height transition jitter from live value updates
         css += '.box { transition: height 0.5s ease !important; }\n';
         css += '.spacerv { transition: height 0.5s ease !important; }\n';
@@ -4737,6 +5135,17 @@ return forecast.map(function(d) {
         css += '.section:last-of-type .box > div[title*="EV"] ~ .label::after { content: var(--pct-dst-ev); }\n';
         css += '.section:last-of-type .box > div[title*="HP"] ~ .label::after { content: var(--pct-dst-hp); }\n';
         css += '.section:last-of-type .box > div[title*="Home"] ~ .label::after { content: var(--pct-dst-load); }\n';
+        // Style the Losses box — only present when losses toggle is ON
+        if (f.show_losses_in_sankey) {
+          css += '.box > div[title*="Losses"] ~ .label .name { border-color: #555 !important; }\n';
+          css += '.section:last-of-type .box > div[title*="Losses"] ~ .label::after { content: var(--pct-losses); }\n';
+        }
+        // Make flows preserve source colors (destination-end gradient stops at 30% opacity)
+        css += 'stop[stop-color="#e8337f"][offset="100%"] { stop-opacity: 0.3 !important; }\n';
+        css += 'stop[stop-color="#00d4b8"][offset="100%"] { stop-opacity: 0.3 !important; }\n';
+        css += 'stop[stop-color="#7c5cbf"][offset="100%"] { stop-opacity: 0.3 !important; }\n';
+        css += 'stop[stop-color="#e67e22"][offset="100%"] { stop-opacity: 0.3 !important; }\n';
+        css += 'stop[stop-color="#ff69b4"][offset="100%"] { stop-opacity: 0.3 !important; }\n';
         // Mobile responsive: smaller labels when boxes are compact
         css += '@media (max-width: 500px) { .box .label .state { font-size: 18px !important; } .section:first-of-type .box > div:first-child { min-width: 65px !important; } .section:last-of-type .box > div:first-child { min-width: 65px !important; } }\n';
         sankeyChart.card_mod.style['sankey-chart-base$'] = css;
@@ -4755,13 +5164,12 @@ return forecast.map(function(d) {
         css += '  padding: 2px !important;\n';
         css += '  max-width: 100% !important;\n';
         css += '}\n';
-        css += 'path { transition: fill-opacity 0.3s ease !important; fill-opacity: 0.55 !important; }\n';
-        css += 'path:hover { fill-opacity: 0.85 !important; }\n';
-        css += 'path[fill-opacity="0.4"] { fill-opacity: 0.55 !important; }\n';
+        css += 'path { transition: fill-opacity 0.3s ease !important; }\n';
+        css += 'path[fill-opacity="0.4"] { fill-opacity: 0.6 !important; }\n';
         css += 'path[fill-opacity="0.85"] { fill-opacity: 0.95 !important; }\n';
         css += '.container, .section { overflow: visible !important; }\n';
         css += '.spacerv { transition: height 0.5s ease !important; }\n';
-        css += '.box { overflow: visible !important; position: relative !important; min-height: 30px !important; cursor: pointer !important; transition: height 0.5s ease !important; }\n';
+        css += '.box { overflow: hidden !important; position: relative !important; min-height: 30px !important; cursor: pointer !important; transition: height 0.5s ease !important; }\n';
         css += '.section:first-of-type .box > div:first-child { min-width: 90px !important; border-radius: 8px 0 0 8px !important; }\n';
         css += '.section:last-of-type .box > div:first-child { min-width: 90px !important; border-radius: 0 8px 8px 0 !important; }\n';
         css += '.box .label { position: absolute !important; top: 2px !important; bottom: 2px !important; transform: none !important; display: flex !important; flex-direction: column !important; justify-content: flex-start !important; gap: 0px !important; line-height: normal !important; z-index: 2 !important; width: auto !important; max-width: 160px !important; overflow: visible !important; padding: 0 6px !important; background: transparent !important; margin: 0 !important; }\n';
@@ -4796,6 +5204,21 @@ return forecast.map(function(d) {
         css += '.section:last-of-type .box > div[title*="EV"] ~ .label::after { content: var(--pct-dst-ev); }\n';
         css += '.section:last-of-type .box > div[title*="HP"] ~ .label::after { content: var(--pct-dst-hp); }\n';
         css += '.section:last-of-type .box > div[title*="Home"] ~ .label::after { content: var(--pct-dst-load); }\n';
+        // Style the Losses box — only present when losses toggle is ON.
+        // When OFF, entity is completely absent from config — no CSS needed.
+        if (f.show_losses_in_sankey) {
+          // Losses ON: show the box with styling and percentage label
+          css += '.box > div[title*="Losses"] ~ .label .name { border-color: #555 !important; }\n';
+          css += '.section:last-of-type .box > div[title*="Losses"] ~ .label::after { content: var(--pct-losses); }\n';
+        }
+        // Multi-source flow visibility: make destination-end gradient stops semi-transparent (30% opacity)
+        // so flow paths preserve their source colors (like the Sigenergy app).
+        // Only targets offset="100%" (destination end), keeping source-end at full opacity.
+        css += 'stop[stop-color="#e8337f"][offset="100%"] { stop-opacity: 0.3 !important; }\n';  // Home
+        css += 'stop[stop-color="#00d4b8"][offset="100%"] { stop-opacity: 0.3 !important; }\n';  // Battery (charge dest)
+        css += 'stop[stop-color="#7c5cbf"][offset="100%"] { stop-opacity: 0.3 !important; }\n';  // Grid Export
+        css += 'stop[stop-color="#e67e22"][offset="100%"] { stop-opacity: 0.3 !important; }\n';  // HP
+        css += 'stop[stop-color="#ff69b4"][offset="100%"] { stop-opacity: 0.3 !important; }\n';  // EV
         // Mobile responsive: smaller labels when boxes are compact
         css += '@media (max-width: 500px) { .box .label .state { font-size: 18px !important; } .section:first-of-type .box > div:first-child { min-width: 65px !important; } .section:last-of-type .box > div:first-child { min-width: 65px !important; } }\n';
         css = jinjaHost + css;
@@ -4870,6 +5293,13 @@ return forecast.map(function(d) {
       const chartStack = [apexChart];
       if (selfSuffCard) chartStack.push(selfSuffCard);
       newCards.push({ type: 'vertical-stack', cards: chartStack });
+
+      // Card 6: Smart Load grid (if enabled and has loads)
+      if (f.smart_loads && cfg.smart_loads?.length > 0) {
+        newCards.push({
+          type: 'custom:sigenergy-smart-load-card',
+        });
+      }
 
       // Preserve persistent config on the layout card — use current store state
       // (not the version from disk, which may be stale due to async save race)
@@ -6467,57 +6897,168 @@ console.info(
       } catch(e) { return null; }
     }
 
+    // Find the sankey-chart element (parent of sankey-chart-base)
+    function findSankeyChart() {
+      try {
+        var ha = document.querySelector('home-assistant');
+        if (!ha || !ha.shadowRoot) return null;
+        var main = ha.shadowRoot.querySelector('home-assistant-main');
+        if (!main || !main.shadowRoot) return null;
+        var panel = main.shadowRoot.querySelector('ha-panel-lovelace');
+        if (!panel || !panel.shadowRoot) return null;
+        var huiRoot = panel.shadowRoot.querySelector('hui-root');
+        if (!huiRoot || !huiRoot.shadowRoot) return null;
+        var view = huiRoot.shadowRoot.querySelector('hui-view');
+        if (!view) return null;
+        var panelView = view.querySelector('hui-panel-view');
+        if (!panelView || !panelView.shadowRoot) return null;
+        var huiCard = panelView.shadowRoot.querySelector('hui-card');
+        if (!huiCard) return null;
+        var lc = huiCard.querySelector('layout-card');
+        if (!lc || !lc.shadowRoot) return null;
+        var gl = lc.shadowRoot.querySelector('grid-layout');
+        if (!gl || !gl.shadowRoot) return null;
+        var root = gl.shadowRoot.querySelector('#root');
+        if (!root) return null;
+        var stacks = root.querySelectorAll('hui-vertical-stack-card');
+        for (var i = 0; i < stacks.length; i++) {
+          var sr = stacks[i].shadowRoot;
+          if (!sr) continue;
+          var cards = sr.querySelectorAll('hui-card');
+          for (var j = 0; j < cards.length; j++) {
+            var sankey = cards[j].querySelector('sankey-chart');
+            if (sankey) return sankey;
+          }
+        }
+        return null;
+      } catch(e) { return null; }
+    }
+
     function patchDestBars(baseSr) {
       if (patching) return;
       patching = true;
       try {
-        var sections = baseSr.querySelectorAll('.section');
-        if (sections.length < 2) return;
-        var lastSec = sections[sections.length - 1];
+        // --- 1. Patch SVG gradient stops: make destination-end stops 30% opacity ---
+        // This preserves source colors through the flow path with semi-transparent overlap at destinations.
         var conns = baseSr.querySelectorAll('.connectors');
-        if (!conns.length) return;
-
-        // Parse SVG paths to find flow extents on destination side (x=100)
-        var maxY = 0, minY = Infinity;
         for (var c = 0; c < conns.length; c++) {
           var svg = conns[c].querySelector('svg');
           if (!svg) continue;
-          var paths = svg.querySelectorAll('path');
-          for (var p = 0; p < paths.length; p++) {
-            var d = paths[p].getAttribute('d');
-            if (!d) continue;
-            var matches = d.match(/100,(\d+\.?\d*)/g);
-            if (!matches) continue;
-            for (var m = 0; m < matches.length; m++) {
-              var y = parseFloat(matches[m].split(',')[1]);
-              if (y > maxY) maxY = y;
-              if (y < minY) minY = y;
-            }
+          var grads = svg.querySelectorAll('linearGradient');
+          for (var g = 0; g < grads.length; g++) {
+            var stops = grads[g].querySelectorAll('stop');
+            if (stops.length < 2) continue;
+            var lastStop = stops[stops.length - 1];
+            // Make destination-end gradient stop 30% opacity to preserve source colors
+            lastStop.setAttribute('stop-opacity', '0.3');
           }
         }
-        if (maxY <= 0 || minY >= maxY) return;
-
-        // Map SVG coords to pixel coords
-        var svg0 = conns[0].querySelector('svg');
-        var vb = svg0 ? svg0.getAttribute('viewBox') : '';
-        var parts = vb ? vb.split(/\s+/) : [];
-        var svgH = parseFloat(parts[3]) || 480;
-        var secH = lastSec.offsetHeight;
-        var scale = secH / svgH;
-        var flowTopPx = Math.round(minY * scale);
-        var flowBottomPx = Math.round(maxY * scale);
-        var flowHeightPx = flowBottomPx - flowTopPx;
-
-        // Destination box height adjustment DISABLED — sankey chart's _calcBoxes()
-        // already handles sizing with min_box_size enforcement. Overriding heights
-        // here caused the last box (Grid Export) to shrink below min_box_size and jump.
       } finally {
         patching = false;
       }
     }
 
+    // Inject proportional connection entities for multi-source flow distribution.
+    // Calculates how much each source contributes to HP/EV based on source proportions.
+    // Accepts a states object to inject into (defaults to ha.hass.states)
+    function injectConnectionEntities(states) {
+      try {
+        if (!states) {
+          var ha = document.querySelector('home-assistant');
+          if (!ha || !ha.hass || !ha.hass.states) return false;
+          states = ha.hass.states;
+        }
+        // Helper: read entity state converting to kWh
+        function toKwh(eid) {
+          var s = states[eid];
+          if (!s) return 0;
+          var v = parseFloat(s.state) || 0;
+          var u = (s.attributes && s.attributes.unit_of_measurement) || 'kWh';
+          if (u === 'MWh') return v * 1000;
+          if (u === 'Wh') return v / 1000;
+          return v;
+        }
+        // Source entity IDs — read from config stored in localStorage
+        var cfg;
+        try { cfg = JSON.parse(localStorage.getItem('sigenergy-dashboard-config')); } catch(e) { return false; }
+        if (!cfg || !cfg.entities) return false;
+        var ents = cfg.entities;
+        var feat = cfg.features || {};
+        var solar = toKwh(ents.solar_energy_today);
+        var batD = toKwh(ents.battery_discharge_today);
+        var gridI = toKwh(ents.grid_import_today || ents.grid_import_high_tariff || ents.grid_import_low_tariff);
+        var total = solar + batD + gridI;
+        if (total <= 0) return false;
+        var solarPct = solar / total;
+        var batPct = batD / total;
+        var gridPct = gridI / total;
+        // Destination small consumers — mirror the entity selection in the main sankey builder
+        var hpEnt = (feat.hp_energy_is_cumulative && ents.hp_energy_daily_meter) ? ents.hp_energy_daily_meter : ents.heat_pump_energy_today;
+        var hp = hpEnt ? toKwh(hpEnt) : 0;
+        var evEnt = (feat.ev_energy_is_cumulative && ents.ev_energy_daily_meter) ? ents.ev_energy_daily_meter : ents.ev_energy_today;
+        var ev = evEnt ? toKwh(evEnt) : 0;
+        var now = new Date().toISOString();
+        // Inject fake entities for each source→destination connection
+        function inject(id, val) {
+          states[id] = { entity_id: id, state: String(val), attributes: { unit_of_measurement: 'kWh' }, last_changed: now, last_updated: now };
+        }
+        if (hp > 0) {
+          inject('_conn_solar_to_hp', hp * solarPct);
+          inject('_conn_bat_to_hp', hp * batPct);
+          inject('_conn_grid_to_hp', hp * gridPct);
+        }
+        if (ev > 0) {
+          inject('_conn_solar_to_ev', ev * solarPct);
+          inject('_conn_bat_to_ev', ev * batPct);
+          inject('_conn_grid_to_ev', ev * gridPct);
+        }
+        return true; // injected something
+      } catch(e) { return false; }
+    }
+
+    // Install a hass property interceptor on the sankey-chart element.
+    // Every time HA sets `hass` on the sankey chart, we inject connection entities
+    // into the states object BEFORE the chart's original setter processes them.
+    var hassInterceptorInstalled = false;
+    function installHassInterceptor() {
+      if (hassInterceptorInstalled) return;
+      var sankeyEl = findSankeyChart();
+      if (!sankeyEl) return;
+      // Get the original hass setter from the prototype chain
+      var proto = Object.getPrototypeOf(sankeyEl);
+      var desc = null;
+      var p = proto;
+      while (p && !desc) {
+        desc = Object.getOwnPropertyDescriptor(p, 'hass');
+        if (desc) break;
+        p = Object.getPrototypeOf(p);
+      }
+      if (!desc || !desc.set) return;
+      var origSet = desc.set;
+      var origGet = desc.get;
+      // Intercept the hass setter on the INSTANCE (doesn't affect other elements)
+      Object.defineProperty(sankeyEl, 'hass', {
+        configurable: true,
+        get: origGet ? function() { return origGet.call(this); } : undefined,
+        set: function(newHass) {
+          if (newHass && newHass.states) {
+            injectConnectionEntities(newHass.states);
+          }
+          origSet.call(this, newHass);
+        }
+      });
+      hassInterceptorInstalled = true;
+    }
+
     function trySetup() {
       try {
+        // Install hass interceptor on the sankey chart (once) to inject connection
+        // entities into every hass update before the chart renders.
+        installHassInterceptor();
+
+        // Also inject into current hass.states (for the initial render)
+        injectConnectionEntities();
+
         var base = findSankeyBase();
         if (!base || !base.shadowRoot) return;
         var baseSr = base.shadowRoot;

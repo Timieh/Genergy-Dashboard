@@ -127,6 +127,7 @@ You can also install them manually:
 | [Sankey Chart Card](https://github.com/MindFreeze/ha-sankey-chart) | [![Install](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=MindFreeze&repository=ha-sankey-chart) | Energy flow diagram |
 | [Mushroom Cards](https://github.com/piitaya/lovelace-mushroom) | [![Install](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=piitaya&repository=lovelace-mushroom) | Status pills and cards |
 | [Card Mod](https://github.com/thomasloven/lovelace-card-mod) | [![Install](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=thomasloven&repository=lovelace-card-mod) | CSS styling injection |
+| [HTML Jinja2 Template Card](https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card) | [![Install](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=PiotrMachowski&repository=Home-Assistant-Lovelace-HTML-Jinja2-Template-card) | HTML forecast tables |
 
 > **Note**: After installing the plugins, restart Home Assistant and hard-refresh your browser (Ctrl+Shift+R / Cmd+Shift+R).
 
