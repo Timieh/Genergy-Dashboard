@@ -4855,10 +4855,11 @@ return forecast.map(function(d) {
       const hpSankeyEntity = (f.hp_energy_is_cumulative && e.hp_energy_daily_meter) ? e.hp_energy_daily_meter : e.heat_pump_energy_today;
 
       // Build Sankey destinations list (Load is always present, EV/HP are optional)
+      // IMPORTANT: EV/HP go AFTER Battery and Grid Export so that if ha-sankey-chart
+      // hides them (below min_state), the click target mismatch doesn't affect
+      // the main destination items (Home, Battery, Grid).
       const sankeyDest = [];
       if (e.load_energy_today) sankeyDest.push({ entity_id: e.load_energy_today, name: 'Home', color: '#e8337f' });
-      if (f.show_ev_in_sankey && evSankeyEntity) sankeyDest.push({ entity_id: evSankeyEntity, name: 'EV', color: '#ff69b4' });
-      if (f.show_hp_in_sankey && hpSankeyEntity) sankeyDest.push({ entity_id: hpSankeyEntity, name: 'HP', color: '#e67e22' });
       if (e.battery_charge_today) sankeyDest.push({ entity_id: e.battery_charge_today, name: 'Battery', color: '#00d4b8' });
 
       // Grid export destination — prefer the non-tariff total entity for accurate Sankey sizing.
@@ -4878,6 +4879,11 @@ return forecast.map(function(d) {
         if (_gridExportAdd) exportNode.add_entities = _gridExportAdd;
         sankeyDest.push(exportNode);
       }
+
+      // EV/HP added last — if ha-sankey-chart hides them (below min_state),
+      // the click target mismatch only affects the bottom items, not main destinations.
+      if (f.show_ev_in_sankey && evSankeyEntity) sankeyDest.push({ entity_id: evSankeyEntity, name: 'EV', color: '#ff69b4' });
+      if (f.show_hp_in_sankey && hpSankeyEntity) sankeyDest.push({ entity_id: hpSankeyEntity, name: 'HP', color: '#e67e22' });
 
       // Build source children arrays — sources can flow to all destinations
       // ha-sankey-chart uses greedy allocation: first child claims energy first.
@@ -4941,7 +4947,7 @@ return forecast.map(function(d) {
         show_names: true, show_states: true, show_units: true, show_icons: false,
         round: 1, height: 480, wide: true,
         min_box_size: 50, min_box_distance: 8, unit_prefix: 'k',
-        min_state: 0.01,
+        min_state: 0.1,
         throttle: 10000,
         energy_date_selection: false,
         ignore_missing_entities: true,

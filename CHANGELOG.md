@@ -2,6 +2,15 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.18.3] - 2026-06-17
+
+### Fixed
+- **Smart Load Card Tile Flashing** — Tiles no longer flash between grey and normal color on hover or during state updates. Replaced full `innerHTML` re-render on every `hass` update with in-place DOM value updates (`_updateValues()` method). Full re-render only triggers on initial load or when configured load keys change
+- **Sankey Click Target Mismatch** — Clicking "Battery" on the Sankey destination side no longer opens "Heat Pump" detail. Reordered destination entities so EV and Heat Pump appear after Battery and Grid Export (hidden items at bottom don't shift main click targets). Increased `min_state` threshold from 0.01 to 0.1 kWh to prevent tiny energy consumers from briefly appearing
+
+### Thanks
+- **@Roving-Ronin** for reporting both the tile flashing and Sankey click target issues
+
 ## [2.18.2] - 2026-06-17
 
 ### Added

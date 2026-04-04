@@ -69,12 +69,20 @@ class SigenergySmartLoadCard extends HTMLElement {
     this._hass = null;
     this._config = {};
     this._unsubStore = null;
+    this._rendered = false;
+    this._lastLoadKeys = '';
   }
 
   set hass(hass) {
     const changed = this._hass !== hass;
     this._hass = hass;
-    if (changed) this._render();
+    if (changed) {
+      if (this._rendered) {
+        this._updateValues();
+      } else {
+        this._render();
+      }
+    }
   }
 
   setConfig(config) {
@@ -84,13 +92,14 @@ class SigenergySmartLoadCard extends HTMLElement {
   connectedCallback() {
     const store = window.SigenergyConfig;
     if (store) {
-      this._unsubStore = store.subscribe(() => this._render());
+      this._unsubStore = store.subscribe(() => { this._rendered = false; this._render(); });
     }
     this._render();
   }
 
   disconnectedCallback() {
     if (this._unsubStore) { this._unsubStore(); this._unsubStore = null; }
+    this._rendered = false;
   }
 
   getCardSize() {
@@ -103,6 +112,72 @@ class SigenergySmartLoadCard extends HTMLElement {
     const cfg = store.get();
     if (!cfg.features?.smart_loads) return [];
     return cfg.smart_loads || [];
+  }
+
+  _updateValues() {
+    if (!this.shadowRoot || !this._hass) return;
+    const loads = this._getSmartLoads();
+    const hass = this._hass;
+    const standbyThreshold = window.SigenergyConfig?.get()?.features?.smart_load_standby_threshold || 5;
+
+    // Check if loads config changed (needs full re-render)
+    const loadKeys = loads.map(l => l.entity_power + '|' + l.label).join(';');
+    if (loadKeys !== this._lastLoadKeys) {
+      this._rendered = false;
+      this._render();
+      return;
+    }
+
+    // Update values in-place without replacing DOM
+    const tiles = this.shadowRoot.querySelectorAll('.tile');
+    let totalWatts = 0;
+    let totalKwh = 0;
+
+    tiles.forEach(tile => {
+      const entityId = tile.dataset.entity;
+      const load = loads.find(l => l.entity_power === entityId);
+      if (!load) return;
+
+      const powerState = hass.states?.[load.entity_power];
+      let watts = null;
+      if (powerState) {
+        const val = parseFloat(powerState.state);
+        const uom = powerState.attributes?.unit_of_measurement;
+        if (!isNaN(val)) watts = (uom === 'kW') ? val * 1000 : val;
+      }
+      const energyState = hass.states?.[load.entity_energy];
+      const kwh = energyState ? parseFloat(energyState.state) : null;
+
+      if (watts != null) totalWatts += watts;
+      if (kwh != null && !isNaN(kwh)) totalKwh += kwh;
+
+      // Update power text
+      let cls = 'off', tileCls = '';
+      if (watts != null && watts > 0) {
+        if (watts > 1000) { cls = 'high'; tileCls = 'high'; }
+        else if (watts <= standbyThreshold) { cls = 'standby'; tileCls = 'standby'; }
+        else { cls = 'active'; tileCls = 'active'; }
+      }
+
+      tile.className = 'tile' + (tileCls ? ' ' + tileCls : '');
+      const powerEl = tile.querySelector('.tile-power');
+      if (powerEl) {
+        powerEl.className = 'tile-power ' + cls;
+        powerEl.textContent = _formatPower(watts);
+      }
+      const energyEl = tile.querySelector('.tile-energy');
+      if (energyEl && kwh != null && !isNaN(kwh)) {
+        energyEl.textContent = _formatEnergy(kwh);
+      }
+    });
+
+    // Update totals
+    const totalEl = this.shadowRoot.querySelector('.header-total');
+    if (totalEl) totalEl.textContent = _formatPower(totalWatts);
+    const totalValueEl = this.shadowRoot.querySelector('.total-value');
+    if (totalValueEl) {
+      totalValueEl.textContent = _formatPower(totalWatts) + (totalKwh > 0 ? ' · ' + _formatEnergy(totalKwh) : '');
+    }
   }
 
   _render() {
@@ -309,6 +384,9 @@ class SigenergySmartLoadCard extends HTMLElement {
         }
       });
     });
+
+    this._rendered = true;
+    this._lastLoadKeys = loads.map(l => l.entity_power + '|' + l.label).join(';');
   }
 }
 
