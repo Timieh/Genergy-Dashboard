@@ -685,6 +685,12 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ---
 
+## Acknowledgments
+
+- **[Roving-Ronin](https://github.com/Roving-Ronin/myHomeAssistant)** — V2 Event Cards for HAEO, EMHASS, and Energy Manager. Features Future Decisions / Past Events timeline tables with event classification, 16 color-coded energy scenarios, per-slot cost calculation, historical kWh delta tracking, and three-tier sensor fallback
+
+---
+
 ## License
 
 This project is licensed under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International** (CC BY-NC-SA 4.0) license.

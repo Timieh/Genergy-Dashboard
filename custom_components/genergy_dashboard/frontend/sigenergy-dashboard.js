@@ -1,5 +1,5 @@
 /**
- * Genergy Dashboard v2.20.1 — Bundled Distribution
+ * Genergy Dashboard v2.21.0-pre.1 — Bundled Distribution
  * 
  * Self-contained Lit Element cards for Home Assistant.
  * No build step required — loads directly as an ES module.
@@ -149,6 +149,10 @@ const DEFAULT_ENTITIES = {
   // Utility meter entities (auto-created for cumulative sensors)
   ev_energy_daily_meter: '',
   hp_energy_daily_meter: '',
+  // Energy Manager (Node-RED) entities
+  em_decision: '',
+  em_buy_price: '',
+  em_sell_price: '',
 };
 
 const DEFAULT_CONFIG = {
@@ -204,7 +208,14 @@ const DEFAULT_CONFIG = {
     soc_ring_low: 40,
     soc_ring_high: 60,
     kiosk_mode: false,
+    heat_pump_label: 'HEAT PUMP',
+    sankey_color_theme: 'modern',
   },
+};
+
+const SANKEY_THEMES = {
+  modern:  { solar: '#D4C850', battery: '#4ECDC4', grid_import: '#6B8FD4', home: '#9B7AB8', grid_export: '#7B8FD4', ev: '#E8705A', hp: '#E8A799', losses: '#444444' },
+  vibrant: { solar: '#c8b84a', battery: '#00d4b8', grid_import: '#6b7fd4', home: '#e8337f', grid_export: '#7c5cbf', ev: '#ff69b4', hp: '#e67e22', losses: '#444444' },
 };
 
 class SigConfigStore {
@@ -225,6 +236,25 @@ class SigConfigStore {
           const localTs = this._config?._ts || 0;
           const haTs = cfg._ts || 0;
           if (haTs >= localTs) {
+            // Defensive: preserve smart_loads array if HA version is empty but local has data
+            // This prevents stale HA config from wiping smart loads configured on this device
+            const localLoads = this._config?.smart_loads;
+            if (Array.isArray(localLoads) && localLoads.length > 0 &&
+                (!cfg.smart_loads || cfg.smart_loads.length === 0)) {
+              cfg.smart_loads = localLoads;
+            }
+            // If BOTH HA and local config have empty smart_loads but backup exists, restore from backup
+            if (!cfg.smart_loads || cfg.smart_loads.length === 0) {
+              try {
+                const backup = localStorage.getItem('genergy_smart_loads_backup');
+                if (backup) {
+                  const parsed = JSON.parse(backup);
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    cfg.smart_loads = parsed;
+                  }
+                }
+              } catch(e) {}
+            }
             this._config = cfg;
             // Also update localStorage cache
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...cfg, _version: 1, _saved: new Date().toISOString() })); } catch(e) {}
@@ -236,7 +266,21 @@ class SigConfigStore {
   }
 
   get() {
-    if (!this._config) this._config = this._load();
+    if (!this._config) {
+      this._config = this._load();
+      // Recover smart_loads from backup if main config lost them
+      if ((!this._config.smart_loads || this._config.smart_loads.length === 0) && this._config.features?.smart_loads) {
+        try {
+          const backup = localStorage.getItem('genergy_smart_loads_backup');
+          if (backup) {
+            const parsed = JSON.parse(backup);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              this._config.smart_loads = parsed;
+            }
+          }
+        } catch(e) {}
+      }
+    }
     return this._config;
   }
 
@@ -297,7 +341,22 @@ class SigConfigStore {
           if (c?._sigenergy_config) { stored = c._sigenergy_config; break; }
         }
       }
-      if (stored) return this._merge(DEFAULT_CONFIG, stored);
+      if (stored) {
+        const merged = this._merge(DEFAULT_CONFIG, stored);
+        // Recover smart_loads from backup if HA config lost them
+        if ((!merged.smart_loads || merged.smart_loads.length === 0) && merged.features?.smart_loads) {
+          try {
+            const backup = localStorage.getItem('genergy_smart_loads_backup');
+            if (backup) {
+              const parsed = JSON.parse(backup);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                merged.smart_loads = parsed;
+              }
+            }
+          } catch(e) {}
+        }
+        return merged;
+      }
     } catch (e) { console.warn('SigConfig: failed to load from HA', e); }
     return null;
   }
@@ -312,6 +371,10 @@ class SigConfigStore {
         ...config, _version: 1, _saved: new Date().toISOString(),
       }));
     } catch (e) { /* ignore */ }
+    // Backup smart_loads independently — survives config overwrites
+    if (config.smart_loads && config.smart_loads.length > 0) {
+      try { localStorage.setItem('genergy_smart_loads_backup', JSON.stringify(config.smart_loads)); } catch(e) {}
+    }
     // Write to HA dashboard config (permanent storage) — awaited to prevent stale reads on refresh
     this._saveToHAPromise = this._saveToHA(config);
   }
@@ -1195,6 +1258,7 @@ class SigenergySettingsCard extends HTMLElement {
     const emsProvider = cfg.features?.ems_provider || (cfg.features?.emhass === true ? 'emhass' : 'none');
     const emhassOn = emsProvider === 'emhass';
     const haeoOn = emsProvider === 'haeo';
+    const emOn = emsProvider === 'energy_manager';
     el.innerHTML = `
       <div style="margin-bottom:16px;padding:12px;background:rgba(0,212,184,0.08);border:1px solid rgba(0,212,184,0.25);border-radius:10px;">
         <div style="display:flex;align-items:center;justify-content:space-between;">
@@ -1263,19 +1327,21 @@ class SigenergySettingsCard extends HTMLElement {
         ${this._entityRow('Sell Price', 'sell_price', e)}
         ${this._entityRow('Nordpool', 'nordpool', e)}
       </div>
-      <div class="section" style="border:1px solid ${emhassOn ? '#00d4b8' : haeoOn ? '#7c4dff' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
-        <div style="margin-bottom:${emhassOn || haeoOn ? '12' : '0'}px;">
-          <div style="font-size:14px;font-weight:700;color:${emhassOn ? '#00d4b8' : haeoOn ? '#7c4dff' : '#8892a4'};display:flex;align-items:center;">🤖 Energy Management System (EMS) <button class="section-detect-btn" data-section="ems" title="Auto-detect EMS/HAEO/EMHASS entities" style="margin-left:8px;">🔍</button></div>
+      <div class="section" style="border:1px solid ${emhassOn ? '#00d4b8' : haeoOn ? '#7c4dff' : emOn ? '#ff9800' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
+        <div style="margin-bottom:${emhassOn || haeoOn || emOn ? '12' : '0'}px;">
+          <div style="font-size:14px;font-weight:700;color:${emhassOn ? '#00d4b8' : haeoOn ? '#7c4dff' : emOn ? '#ff9800' : '#8892a4'};display:flex;align-items:center;">🤖 Energy Management System (EMS) <button class="section-detect-btn" data-section="ems" title="Auto-detect EMS/HAEO/EMHASS entities" style="margin-left:8px;">🔍</button></div>
           <div style="font-size:11px;color:#8892a4;margin-top:2px;">Select your energy optimizer. Configure entities below after selecting a provider.</div>
           <div style="display:flex;gap:8px;margin-top:10px;">
             <button class="ems-btn ${emsProvider === 'none' ? 'active' : ''}" data-ems="none" style="flex:1;padding:8px 6px;border:1px solid ${emsProvider === 'none' ? '#8892a4' : '#2d3451'};background:${emsProvider === 'none' ? 'rgba(136,146,164,0.15)' : 'transparent'};color:${emsProvider === 'none' ? '#fff' : '#8892a4'};border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;">None</button>
             <button class="ems-btn ${emhassOn ? 'active' : ''}" data-ems="emhass" style="flex:1;padding:8px 6px;border:1px solid ${emhassOn ? '#00d4b8' : '#2d3451'};background:${emhassOn ? 'rgba(0,212,184,0.15)' : 'transparent'};color:${emhassOn ? '#00d4b8' : '#8892a4'};border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;">EMHASS</button>
             <button class="ems-btn ${haeoOn ? 'active' : ''}" data-ems="haeo" style="flex:1;padding:8px 6px;border:1px solid ${haeoOn ? '#7c4dff' : '#2d3451'};background:${haeoOn ? 'rgba(124,77,255,0.15)' : 'transparent'};color:${haeoOn ? '#7c4dff' : '#8892a4'};border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;">HAEO</button>
+            <button class="ems-btn ${emOn ? 'active' : ''}" data-ems="energy_manager" style="flex:1;padding:8px 6px;border:1px solid ${emOn ? '#ff9800' : '#2d3451'};background:${emOn ? 'rgba(255,152,0,0.15)' : 'transparent'};color:${emOn ? '#ff9800' : '#8892a4'};border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;">Energy Mgr</button>
           </div>
         </div>
         ${emhassOn ? `
           <div style="border-top:1px solid rgba(0,212,184,0.2);padding-top:10px;">
             <div class="section-title" style="font-size:11px;">MPC Forecast Entities</div>
+            <div class="toggle-desc" style="margin-bottom:4px;color:#8892a4;font-size:10px;">Core EMHASS sensors with forecast attributes. The V2 card auto-discovers standard names (sensor.p_batt_forecast, sensor.mpc_batt_power, etc.) — only set these if your entities differ.</div>
             ${this._entityRow('MPC Battery', 'mpc_battery', e)}
             ${this._entityRow('MPC Grid', 'mpc_grid', e)}
             ${this._entityRow('MPC PV', 'mpc_pv', e)}
@@ -1285,12 +1351,14 @@ class SigenergySettingsCard extends HTMLElement {
           </div>
           <div style="margin-top:8px;">
             <div class="section-title" style="font-size:11px;">EMHASS Status</div>
+            <div class="toggle-desc" style="margin-bottom:4px;color:#8892a4;font-size:10px;">Optional — only available if using custom EMHASS integration (sensor.emhass_*). Leave blank for standard EMHASS add-on.</div>
             ${this._entityRow('Mode', 'emhass_mode', e)}
             ${this._entityRow('Reason', 'emhass_reason', e)}
             ${this._entityRow('Battery Action', 'emhass_battery_action', e)}
           </div>
           <div style="margin-top:8px;">
             <div class="section-title" style="font-size:11px;">EMHASS Financial</div>
+            <div class="toggle-desc" style="margin-bottom:4px;color:#8892a4;font-size:10px;">Optional — only available with custom EMHASS cost tracking sensors. Standard EMHASS users can leave these blank.</div>
             ${this._entityRow('Savings Today', 'emhass_savings_today', e)}
             ${this._entityRow('Net Cost Today', 'emhass_net_cost_today', e)}
             ${this._entityRow('Net Cost Month', 'emhass_net_cost_month', e)}
@@ -1313,6 +1381,7 @@ class SigenergySettingsCard extends HTMLElement {
           </div>
           <div style="margin-top:8px;">
             <div class="section-title" style="font-size:11px;">Additional Financial</div>
+            <div class="toggle-desc" style="margin-bottom:4px;color:#8892a4;font-size:10px;">Optional — advanced cost tracking entities. Only available if using custom EMHASS templates (e.g. for detailed bill projections).</div>
             ${this._entityRow('Export Earn Daily', 'emhass_export_earnings_daily', e)}
             ${this._entityRow('Import Cost Daily', 'emhass_import_cost_daily', e)}
             ${this._entityRow('Grid-Only Cost', 'emhass_grid_only_cost_daily', e)}
@@ -1363,6 +1432,23 @@ class SigenergySettingsCard extends HTMLElement {
             <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">number.grid_import_price — includes forecast attribute with future import prices</div>
             ${this._entityRow('Export Price Forecast', 'haeo_export_price', e)}
             <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">number.grid_export_price — includes forecast attribute with future export prices</div>
+          </div>
+        ` : ''}
+        ${emOn ? `
+          <div style="border-top:1px solid rgba(255,152,0,0.2);padding-top:10px;">
+            <div style="font-size:10px;color:#666;margin-bottom:8px;">Requires the <a href="https://github.com/Roving-Ronin/myHomeAssistant" target="_blank" style="color:#ff9800;">Energy Manager</a> Node-RED flow. Uses <b>sensor.energy_manager_plan</b> and Sigenergy inverter sensors.</div>
+            <div class="section-title" style="font-size:11px;">Core Entities</div>
+            <div class="toggle-desc" style="margin-bottom:4px;color:#8892a4;font-size:10px;">The EM card uses hardcoded Sigenergy sensor names. Override if your entity IDs differ.</div>
+            ${this._entityRow('EM Decision', 'em_decision', e)}
+            <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">sensor.energy_manager_decision — current operating mode</div>
+          </div>
+          <div style="margin-top:8px;">
+            <div class="section-title" style="font-size:11px;">Price Entities</div>
+            <div class="toggle-desc" style="margin-bottom:4px;color:#8892a4;font-size:10px;">Node-RED buy/sell price sensors for cost tracking</div>
+            ${this._entityRow('Buy Price', 'em_buy_price', e)}
+            <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">sensor.nodered_buyprice — current buy price from your provider</div>
+            ${this._entityRow('Sell Price', 'em_sell_price', e)}
+            <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">sensor.nodered_sellprice — current sell/feed-in price</div>
           </div>
         ` : ''}
       </div>
@@ -3347,6 +3433,19 @@ class SigenergySettingsCard extends HTMLElement {
         }
       }
     }
+    // Energy Manager detection — requires sensor.energy_manager_decision
+    if (!statusKey && cfg2.features.ems_provider === 'none') {
+      const hasEmDecision = allKeys.includes('sensor.energy_manager_decision');
+      const hasEmPlan = allKeys.includes('sensor.energy_manager_plan');
+      if (hasEmDecision || hasEmPlan) {
+        if (hasEmDecision) { cfg2.entities.em_decision = 'sensor.energy_manager_decision'; found.push('EM decision: sensor.energy_manager_decision'); }
+        // Detect Node-RED price sensors
+        if (allKeys.includes('sensor.nodered_buyprice')) { cfg2.entities.em_buy_price = 'sensor.nodered_buyprice'; found.push('EM buy price: sensor.nodered_buyprice'); }
+        if (allKeys.includes('sensor.nodered_sellprice')) { cfg2.entities.em_sell_price = 'sensor.nodered_sellprice'; found.push('EM sell price: sensor.nodered_sellprice'); }
+        cfg2.features.ems_provider = 'energy_manager';
+        found.push('✓ Energy Manager detected');
+      }
+    }
     if (found.length > 0) this._storeSave(cfg2);
     return found;
   }
@@ -3432,11 +3531,12 @@ class SigenergySettingsCard extends HTMLElement {
       </div>
       <div class="section">
         <div class="section-title">🤖 Energy Management (EMS)</div>
-        <div style="font-size:10px;color:#666;margin-bottom:8px;">Choose your energy optimizer. <a href="https://emhass.readthedocs.io/" target="_blank" style="color:#00d4b8;">EMHASS</a> (add-on) or <a href="https://github.com/hass-energy/haeo" target="_blank" style="color:#7c4dff;">HAEO</a> (HACS integration). Configure entities on the Entities tab → EMS section.</div>
+        <div style="font-size:10px;color:#666;margin-bottom:8px;">Choose your energy optimizer. <a href="https://emhass.readthedocs.io/" target="_blank" style="color:#00d4b8;">EMHASS</a> (add-on), <a href="https://github.com/hass-energy/haeo" target="_blank" style="color:#7c4dff;">HAEO</a> (HACS integration), or <a href="https://github.com/Roving-Ronin/myHomeAssistant" target="_blank" style="color:#ff9800;">Energy Manager</a> (Node-RED).  Configure entities on the Entities tab → EMS section.</div>
         <div style="display:flex;gap:8px;margin-bottom:12px;">
           <button class="ems-feature-btn ${emsProvider === 'none' ? 'active' : ''}" data-ems="none" style="flex:1;padding:10px 8px;border:1px solid ${emsProvider === 'none' ? '#8892a4' : '#2d3451'};background:${emsProvider === 'none' ? 'rgba(136,146,164,0.15)' : 'transparent'};color:${emsProvider === 'none' ? '#fff' : '#8892a4'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">None</button>
           <button class="ems-feature-btn ${emsProvider === 'emhass' ? 'active' : ''}" data-ems="emhass" style="flex:1;padding:10px 8px;border:1px solid ${emsProvider === 'emhass' ? '#00d4b8' : '#2d3451'};background:${emsProvider === 'emhass' ? 'rgba(0,212,184,0.15)' : 'transparent'};color:${emsProvider === 'emhass' ? '#00d4b8' : '#8892a4'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">EMHASS</button>
           <button class="ems-feature-btn ${emsProvider === 'haeo' ? 'active' : ''}" data-ems="haeo" style="flex:1;padding:10px 8px;border:1px solid ${emsProvider === 'haeo' ? '#7c4dff' : '#2d3451'};background:${emsProvider === 'haeo' ? 'rgba(124,77,255,0.15)' : 'transparent'};color:${emsProvider === 'haeo' ? '#7c4dff' : '#8892a4'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">HAEO</button>
+          <button class="ems-feature-btn ${emsProvider === 'energy_manager' ? 'active' : ''}" data-ems="energy_manager" style="flex:1;padding:10px 8px;border:1px solid ${emsProvider === 'energy_manager' ? '#ff9800' : '#2d3451'};background:${emsProvider === 'energy_manager' ? 'rgba(255,152,0,0.15)' : 'transparent'};color:${emsProvider === 'energy_manager' ? '#ff9800' : '#8892a4'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">Energy Mgr</button>
         </div>
         ${emsProvider === 'emhass' ? `
           ${this._toggleHtml('EMHASS Forecasts', 'Overlay MPC forecast series (PV/Battery/Grid/Load) on energy charts', 'emhass_forecasts', f.emhass_forecasts)}
@@ -3448,6 +3548,10 @@ class SigenergySettingsCard extends HTMLElement {
           ${this._toggleHtml('HAEO Forecasts', 'Overlay HAEO optimization schedule on energy charts (via forecast attributes)', 'haeo_forecasts', f.haeo_forecasts)}
           ${this._toggleHtml('Forecast Table', 'Show a tabular timeline of upcoming forecast data (PV/Battery/Grid/Load/SoC/Prices)', 'forecast_table', f.forecast_table)}
           ${this._toggleHtml('Financial Tracking', 'Show optimization cost in chart annotations', 'financial_tracking', f.financial_tracking)}
+        ` : ''}
+        ${emsProvider === 'energy_manager' ? `
+          ${this._toggleHtml('Forecast Table', 'Show the Energy Manager decision timeline with cost/profit tracking', 'forecast_table', f.forecast_table)}
+          ${this._toggleHtml('Financial Tracking', 'Show cost/profit tracking in chart annotations', 'financial_tracking', f.financial_tracking)}
         ` : ''}
       </div>
       <div class="section">
@@ -3984,6 +4088,29 @@ class SigenergySettingsCard extends HTMLElement {
         await this._hass.callWS({ type: 'lovelace/config/save', url_path: 'dashboard-sigenergy', config });
       }
     } catch (e) { console.error('Sync battery_label to dashboard failed:', e); }
+  }
+
+  async _syncHeatPumpLabelToDashboard(value) {
+    if (!this._hass) return;
+    try {
+      const config = await this._hass.callWS({ type: 'lovelace/config', url_path: 'dashboard-sigenergy' });
+      const patchHouse = (obj) => {
+        if (!obj || typeof obj !== 'object') return false;
+        if (obj.type === 'custom:sigenergy-house-card') {
+          if (value) obj.heat_pump_label = value;
+          else delete obj.heat_pump_label;
+          return true;
+        }
+        for (const v of Object.values(obj)) {
+          if (Array.isArray(v)) { for (const item of v) { if (patchHouse(item)) return true; } }
+          else if (typeof v === 'object' && v !== null) { if (patchHouse(v)) return true; }
+        }
+        return false;
+      };
+      if (patchHouse(config)) {
+        await this._hass.callWS({ type: 'lovelace/config/save', url_path: 'dashboard-sigenergy', config });
+      }
+    } catch (e) { console.error('Sync heat_pump_label to dashboard failed:', e); }
   }
 
   async _syncSocTargetsToDashboard(cfg) {
@@ -5018,439 +5145,59 @@ return forecast.map(function(d) {
       const houseStack = [houseCardOrig];
       if (emsStatusCard) houseStack.push(emsStatusCard);
 
-      // Build Forecast Timeline Table (conditional on forecast_table feature)
-      let forecastTableCard = null;
-      let ftToggleCard = null;
-      let ftConditionalCard = null;
+      // Build Forecast Modal — compact trigger bar that opens fullscreen overlay on tap
+      let forecastModalCard = null;
       if (f.forecast_table && emsP !== 'none') {
-        const currency = cfg.pricing?.currency || '€';
         const _ft = _resolvedTheme;
         const _ftBg = _ft === 'light' ? '#f8f9fa' : 'rgba(30,35,54,0.94)';
         const _ftBorder = _ft === 'light' ? '#e0e0e0' : '#2d3451';
-        const _ftText = _ft === 'light' ? '#1a1f2e' : '#e0e4ec';
-        const _ftMuted = _ft === 'light' ? '#666' : '#8892a4';
-        const _ftRowAlt = _ft === 'light' ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.03)';
-        const _ftNowBg = _ft === 'light' ? 'rgba(0,212,184,0.12)' : 'rgba(0,212,184,0.15)';
 
+        let innerCard = null;
+        let modalTitle = '';
+        let modalIconColor = 'teal';
         if (emsP === 'haeo') {
-          // HAEO forecast table — uses forecast attributes (HTML table via html-template-card)
-          const hImpP = e.haeo_import_price || '';
-          const hExpP = e.haeo_export_price || '';
-          const hBatt = e.haeo_battery_charge || e.haeo_battery_discharge || '';
-          const hGrid = e.haeo_grid_power || '';
-          const hSolar = e.haeo_solar_power || '';
-          const hLoad = e.haeo_load_power || '';
-          const hSoc = e.haeo_battery_soc || '';
-          const hHasNet = hImpP && hExpP && hGrid;
-
-          // Build Jinja2 template — iterates over export price forecast or falls back
-          const iterEntity = hExpP || hImpP || hSolar || hLoad || hGrid || hBatt || hSoc;
-          if (iterEntity) {
-            // Count total columns for colspan in day-divider rows
-            let haeCols = 1; // Time
-            if (hImpP) haeCols++;
-            if (hExpP) haeCols++;
-            if (hSolar) haeCols++;
-            if (hLoad) haeCols++;
-            if (hGrid) haeCols++;
-            if (hBatt) haeCols++;
-            if (hSoc) haeCols++;
-            if (hHasNet) haeCols++;
-            const leftCols = Math.max(1, haeCols - 3);
-            const rightCols = haeCols - leftCols;
-
-            let tpl = '';
-            // CSS variables for theming
-            const _thStyle = "position:sticky; top:0; z-index:2; background:var(--card-background-color); padding:4px 6px; border-bottom:2px solid var(--divider-color); text-align:center; white-space:nowrap; font-size:11px; color:var(--secondary-text-color);";
-            const _tdStyle = "padding:4px 6px; border-bottom:1px solid var(--divider-color); text-align:center; white-space:nowrap;";
-            const _dayStyle = "padding:6px; border-bottom:1px solid var(--divider-color); border-top:2px solid var(--divider-color); font-weight:bold; background:var(--secondary-background-color);";
-
-            // Collect all forecast arrays into time-keyed maps
-            tpl += "{%- set _iter = state_attr('" + iterEntity + "', 'forecast') or [] %}\n";
-            if (hImpP) tpl += "{%- set _imp_fc = state_attr('" + hImpP + "', 'forecast') or [] %}\n";
-            if (hExpP) tpl += "{%- set _exp_fc = state_attr('" + hExpP + "', 'forecast') or [] %}\n";
-            if (hBatt) tpl += "{%- set _batt_fc = state_attr('" + hBatt + "', 'forecast') or [] %}\n";
-            if (hGrid) tpl += "{%- set _grid_fc = state_attr('" + hGrid + "', 'forecast') or [] %}\n";
-            if (hSolar) tpl += "{%- set _solar_fc = state_attr('" + hSolar + "', 'forecast') or [] %}\n";
-            if (hLoad) tpl += "{%- set _load_fc = state_attr('" + hLoad + "', 'forecast') or [] %}\n";
-            if (hSoc) tpl += "{%- set _soc_fc = state_attr('" + hSoc + "', 'forecast') or [] %}\n";
-
-            // Build time-keyed lookup dicts
-            tpl += "{%- set ns = namespace(imp={}, exp={}, batt={}, grid={}, solar={}, load={}, soc={}) %}\n";
-            if (hImpP) tpl += "{%- for p in _imp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.imp = dict(ns.imp, **{ts: (p.value * 100) | round(2)}) %}{%- endfor %}\n";
-            if (hExpP) tpl += "{%- for p in _exp_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.exp = dict(ns.exp, **{ts: (p.value * 100) | round(2)}) %}{%- endfor %}\n";
-            if (hBatt) tpl += "{%- for p in _batt_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.batt = dict(ns.batt, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
-            if (hGrid) tpl += "{%- for p in _grid_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.grid = dict(ns.grid, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
-            if (hSolar) tpl += "{%- for p in _solar_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.solar = dict(ns.solar, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
-            if (hLoad) tpl += "{%- for p in _load_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.load = dict(ns.load, **{ts: (p.value) | round(1)}) %}{%- endfor %}\n";
-            if (hSoc) tpl += "{%- for p in _soc_fc %}{%- set ts = p.time | as_datetime | as_local | as_timestamp | string %}{%- set ns.soc = dict(ns.soc, **{ts: (p.value) | round(0)}) %}{%- endfor %}\n";
-
-            // Compute per-slot net cost from buy/sell prices and grid power
-            if (hHasNet) {
-              tpl += "{%- set ns2 = namespace(daily={}, cur_day='', cur_total=0) %}\n";
-              tpl += "{%- for p in _iter %}\n";
-              tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
-              tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
-              tpl += "{%- set _g = ns.grid.get(ts|string, 0)|float(0) %}\n";
-              tpl += "{%- set _bp = ns.imp.get(ts|string, 0)|float(0) / 100 %}\n";
-              tpl += "{%- set _sp = ns.exp.get(ts|string, 0)|float(0) / 100 %}\n";
-              // HAEO: grid > 0 = export (selling), grid < 0 = import (buying)
-              tpl += "{%- set _slot_cost = (_sp * [_g, 0]|max * -1) + (_bp * [-_g, 0]|max) %}\n";
-              tpl += "{%- if _day != ns2.cur_day %}\n";
-              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
-              tpl += "{%- set ns2.cur_day = _day %}{%- set ns2.cur_total = _slot_cost %}\n";
-              tpl += "{%- else %}{%- set ns2.cur_total = ns2.cur_total + _slot_cost %}{%- endif %}\n";
-              tpl += "{%- endfor %}\n";
-              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
-            }
-
-            tpl += "{%- set today = now() | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- set months = ['January','February','March','April','May','June','July','August','September','October','November','December'] %}\n";
-
-            // HTML table start
-            tpl += '<div style="max-height:570px; overflow-y:auto; position:relative;">\n';
-            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px;">\n';
-            tpl += '<thead><tr>\n';
-            tpl += '<th style="' + _thStyle + '">Time</th>\n';
-            if (hImpP) tpl += '<th style="' + _thStyle + '">Buy ' + currency + '</th>\n';
-            if (hExpP) tpl += '<th style="' + _thStyle + '">Sell ' + currency + '</th>\n';
-            if (hSolar) tpl += '<th style="' + _thStyle + '">PV kW</th>\n';
-            if (hLoad) tpl += '<th style="' + _thStyle + '">Load kW</th>\n';
-            if (hGrid) tpl += '<th style="' + _thStyle + '">Grid kW</th>\n';
-            if (hBatt) tpl += '<th style="' + _thStyle + '">Batt kW</th>\n';
-            if (hSoc) tpl += '<th style="' + _thStyle + '">SoC %</th>\n';
-            if (hHasNet) tpl += '<th style="' + _thStyle + '">Net ' + currency + '</th>\n';
-            tpl += '</tr></thead>\n';
-
-            // TODAY section — fully expanded
-            tpl += '<tbody>\n';
-            tpl += "{%- set _todayHeader = namespace(shown=false) %}\n";
-            tpl += "{%- for p in _iter %}\n";
-            tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
-            tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- if _day == today %}\n";
-            tpl += "{%- set _isNow = (ts | int - now().timestamp() | int) | abs < 900 %}\n";
-            tpl += "{%- if not _todayHeader.shown %}{%- set _todayHeader.shown = true %}\n";
-            if (hHasNet) {
-              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
-              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
-              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
-            }
-            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
-            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
-            tpl += '<tr><td colspan="' + leftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
-            if (hHasNet) {
-              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
-            } else {
-              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
-            }
-            tpl += '</tr>\n';
-            tpl += "{%- endif %}\n";
-
-            // Data row
-            tpl += "{%- set t = ts | timestamp_custom('%H:%M') %}\n";
-            tpl += "{%- set _isPast = ts | int < (now().timestamp() | int - 450) %}\n";
-            // Value lookups
-            if (hImpP) tpl += "{%- set _imp_val = ns.imp.get(ts|string, 0) | float(0) %}\n";
-            if (hExpP) tpl += "{%- set _exp_val = ns.exp.get(ts|string, 0) | float(0) %}\n";
-            if (hGrid) tpl += "{%- set _g = ns.grid.get(ts|string) %}\n";
-            if (hSoc) tpl += "{%- set _soc_val = ns.soc.get(ts|string) | float(50) %}\n";
-            if (hHasNet) {
-              tpl += "{%- set _g_f = ns.grid.get(ts|string, 0)|float(0) %}\n";
-              tpl += "{%- set _nc = (ns.exp.get(ts|string,0)|float(0)/100) * [_g_f, 0]|max * -1 + (ns.imp.get(ts|string,0)|float(0)/100) * [-_g_f, 0]|max %}\n";
-            }
-
-            // Colors
-            if (hImpP) tpl += "{%- set _imp_color = '#ff2222' if _imp_val >= 50 else '#cc6600' if _imp_val >= 40 else '#cccc00' if _imp_val >= 30 else '#00e5cc' if _imp_val >= 20 else '#888888' %}\n";
-            if (hExpP) tpl += "{%- set _exp_color = '#00ff00' if _exp_val >= 250 else '#00cc00' if _exp_val >= 100 else '#009900' if _exp_val >= 50 else '#336633' if _exp_val >= 30 else '#888888' %}\n";
-            if (hGrid) tpl += "{%- set _g_color = '#00cc00' if (_g|float(0)) > 0 else '#ff4444' if (_g|float(0)) < 0 else '#888888' %}\n";
-            if (hSoc) tpl += "{%- set _soc_color = '#ff4444' if _soc_val <= 20 else '#00cc00' if _soc_val >= 75 else '' %}\n";
-            if (hHasNet) tpl += "{%- set _nc_color = '#00cc00' if _nc < -0.001 else '#ff4444' if _nc > 0.001 else '' %}\n";
-
-            tpl += "{%- if _isPast %}\n";
-            // Past row — dimmed
-            tpl += '<tr style="opacity:0.4;"><td style="' + _tdStyle + '">{{ t }}</td>';
-            if (hImpP) tpl += '<td style="' + _tdStyle + '">{{ _imp_val | round(1) }}</td>';
-            if (hExpP) tpl += '<td style="' + _tdStyle + '">{{ _exp_val | round(1) }}</td>';
-            if (hSolar) tpl += '<td style="' + _tdStyle + '">{{ ns.solar.get(ts|string, 0) }}</td>';
-            if (hLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(ts|string, \'—\') }}</td>';
-            if (hGrid) tpl += '<td style="' + _tdStyle + '">{{ _g if _g is not none else \'—\' }}</td>';
-            if (hBatt) tpl += '<td style="' + _tdStyle + '">{{ ns.batt.get(ts|string, \'—\') }}</td>';
-            if (hSoc) tpl += '<td style="' + _tdStyle + '">{{ ns.soc.get(ts|string, \'—\') }}%</td>';
-            if (hHasNet) tpl += "<td style=\"" + _tdStyle + "\">{{ '%+0.4f' | format(_nc) }}</td>";
-            tpl += '</tr>\n';
-
-            tpl += "{%- else %}\n";
-            // Current/future row — colored
-            tpl += "<tr{{ ' style=font-weight:bold;' if _isNow else '' }}>";
-            tpl += '<td style="' + _tdStyle + '">{{ \'▶ \' + t if _isNow else t }}</td>';
-            if (hImpP) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _imp_color }};">{{ _imp_val | round(1) }}</span></td>';
-            if (hExpP) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _exp_color }};">{{ _exp_val | round(1) }}</span></td>';
-            if (hSolar) tpl += "<td style=\"" + _tdStyle + "\">{%- set _s = ns.solar.get(ts|string) %}{{ '<span style=color:#e8a835;>' ~ _s ~ '</span>' if _s and _s != 0 else '0' }}</td>";
-            if (hLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(ts|string, \'—\') }}</td>';
-            if (hGrid) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _g_color }};">{{ _g if _g is not none else \'—\' }}</span></td>';
-            if (hBatt) tpl += "<td style=\"" + _tdStyle + "\">{%- set _b = ns.batt.get(ts|string) %}<span style=\"color:{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }};\">{{ _b if _b is not none else '—' }}</span></td>";
-            if (hSoc) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _soc_color }};">{{ ns.soc.get(ts|string, \'—\') }}%</span></td>';
-            if (hHasNet) tpl += "<td style=\"" + _tdStyle + "\"><span style=\"color:{{ _nc_color }};\">{{ '%+0.4f' | format(_nc) }}</span></td>";
-            tpl += '</tr>\n';
-            tpl += "{%- endif %}\n";
-
-            tpl += "{%- endif %}\n"; // end if _day == today
-            tpl += "{%- endfor %}\n";
-            tpl += '</tbody>\n';
-
-            // UPCOMING DAYS — summary rows only
-            tpl += '<tbody>\n';
-            tpl += '<tr><td colspan="' + haeCols + '" style="padding:8px 6px 4px 6px; text-align:left; font-size:11px; color:var(--secondary-text-color); letter-spacing:0.05em; border-top:3px solid var(--divider-color);">UPCOMING DAYS</td></tr>\n';
-            tpl += "{%- set _seenDays = namespace(days=[]) %}\n";
-            tpl += "{%- for p in _iter %}\n";
-            tpl += "{%- set ts = p.time | as_datetime | as_local | as_timestamp %}\n";
-            tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- if _day != today and _day not in _seenDays.days %}\n";
-            tpl += "{%- set _seenDays.days = _seenDays.days + [_day] %}\n";
-            if (hHasNet) {
-              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
-              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
-              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
-            }
-            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
-            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
-            tpl += '<tr><td colspan="' + leftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
-            if (hHasNet) {
-              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
-            } else {
-              tpl += '<td colspan="' + rightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
-            }
-            tpl += '</tr>\n';
-            tpl += "{%- endif %}\n";
-            tpl += "{%- endfor %}\n";
-            tpl += '</tbody>\n';
-
-            tpl += '</table></div>\n';
-
-            forecastTableCard = {
-              type: 'custom:html-template-card',
-              ignore_line_breaks: true,
-              content: tpl,
-              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; }' }
-            };
-          }
+          modalTitle = '📊 HAEO Forecasts';
+          const haeoConfig = { type: 'custom:haeo-events-card' };
+          if (e.haeo_battery_charge || e.haeo_battery_discharge) haeoConfig.entity_battery = e.haeo_battery_charge || e.haeo_battery_discharge;
+          if (e.haeo_grid_power) haeoConfig.entity_grid = e.haeo_grid_power;
+          if (e.haeo_load_power) haeoConfig.entity_load = e.haeo_load_power;
+          if (e.haeo_solar_power) haeoConfig.entity_solar = e.haeo_solar_power;
+          if (e.haeo_battery_soc) haeoConfig.entity_soc = e.haeo_battery_soc;
+          if (e.haeo_import_price) haeoConfig.entity_buy_price = e.haeo_import_price;
+          if (e.haeo_export_price) haeoConfig.entity_sell_price = e.haeo_export_price;
+          haeoConfig.currency_symbol = cfg.pricing?.currency || '$';
+          innerCard = haeoConfig;
         } else if (emsP === 'emhass') {
-          // EMHASS forecast table — each MPC entity has its own forecast attribute (HTML table via html-template-card)
-          const mpPv = e.mpc_pv || '';
-          const mpBatt = e.mpc_battery || '';
-          const mpGrid = e.mpc_grid || '';
-          const mpLoad = e.mpc_load || '';
-          const mpSoc = e.mpc_soc || '';
-          const bpEnt = e.buy_price || '';
-          const spEnt = e.sell_price || '';
-          const emHasNet = bpEnt && spEnt && mpGrid;
-
-          const iterEnt = mpPv || mpGrid || mpLoad || mpBatt || '';
-          if (iterEnt) {
-            // Count total columns
-            let emCols = 1; // Time
-            if (bpEnt) emCols++;
-            if (spEnt) emCols++;
-            if (mpPv) emCols++;
-            if (mpLoad) emCols++;
-            if (mpGrid) emCols++;
-            if (mpBatt) emCols++;
-            if (mpSoc) emCols++;
-            if (emHasNet) emCols++;
-            const emLeftCols = Math.max(1, emCols - 3);
-            const emRightCols = emCols - emLeftCols;
-
-            const _thStyle = "position:sticky; top:0; z-index:2; background:var(--card-background-color); padding:4px 6px; border-bottom:2px solid var(--divider-color); text-align:center; white-space:nowrap; font-size:11px; color:var(--secondary-text-color);";
-            const _tdStyle = "padding:4px 6px; border-bottom:1px solid var(--divider-color); text-align:center; white-space:nowrap;";
-            const _dayStyle = "padding:6px; border-bottom:1px solid var(--divider-color); border-top:2px solid var(--divider-color); font-weight:bold; background:var(--secondary-background-color);";
-
-            let tpl = '';
-            // Load each entity's forecast into a time-keyed dict
-            tpl += "{%- set _iter = state_attr('" + iterEnt + "', 'forecasts') or state_attr('" + iterEnt + "', 'battery_scheduled_power') or [] %}\n";
-            tpl += "{%- set ns = namespace(pv={}, grid={}, load={}, batt={}, soc={}, buy={}, sell={}) %}\n";
-            if (mpPv) tpl += "{%- for p in (state_attr('" + mpPv + "', 'forecasts') or []) %}{%- set ns.pv = dict(ns.pv, **{p.date: ((p.mpc_pv_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpGrid) tpl += "{%- for p in (state_attr('" + mpGrid + "', 'forecasts') or []) %}{%- set ns.grid = dict(ns.grid, **{p.date: ((p.mpc_grid_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpLoad) tpl += "{%- for p in (state_attr('" + mpLoad + "', 'forecasts') or []) %}{%- set ns.load = dict(ns.load, **{p.date: ((p.mpc_load_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpBatt) tpl += "{%- for p in (state_attr('" + mpBatt + "', 'battery_scheduled_power') or []) %}{%- set ns.batt = dict(ns.batt, **{p.date: ((p.mpc_batt_power | float(0)) / 1000) | round(2)}) %}{%- endfor %}\n";
-            if (mpSoc) tpl += "{%- for p in (state_attr('" + mpSoc + "', 'battery_scheduled_soc') or []) %}{%- set ns.soc = dict(ns.soc, **{p.date: (p.mpc_batt_soc | float(0)) | round(0)}) %}{%- endfor %}\n";
-            if (bpEnt) tpl += "{%- for p in (state_attr('" + bpEnt + "', 'unit_load_cost_forecasts') or []) %}{%- set ns.buy = dict(ns.buy, **{p.date: (p.mpc_general_price | float(0)) | round(4)}) %}{%- endfor %}\n";
-            if (spEnt) tpl += "{%- for p in (state_attr('" + spEnt + "', 'unit_prod_price_forecasts') or []) %}{%- set ns.sell = dict(ns.sell, **{p.date: (p.mpc_feed_in_price | float(0)) | round(4)}) %}{%- endfor %}\n";
-
-            // Compute per-slot net cost and daily totals
-            if (emHasNet) {
-              tpl += "{%- set ns2 = namespace(daily={}, cur_day='', cur_total=0) %}\n";
-              tpl += "{%- for row in _iter %}\n";
-              tpl += "{%- set dt = row.date %}\n";
-              tpl += "{%- set _day = dt | as_datetime | as_local | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
-              tpl += "{%- set _g = ns.grid.get(dt, 0)|float(0) %}\n";
-              tpl += "{%- set _bp = ns.buy.get(dt, 0)|float(0) %}\n";
-              tpl += "{%- set _sp = ns.sell.get(dt, 0)|float(0) %}\n";
-              // EMHASS: grid > 0 = import (buying), grid < 0 = export (selling)
-              tpl += "{%- set _slot_cost = _bp * [_g, 0]|max + _sp * [_g, 0]|min * -1 * -1 %}\n";
-              tpl += "{%- if _day != ns2.cur_day %}\n";
-              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
-              tpl += "{%- set ns2.cur_day = _day %}{%- set ns2.cur_total = _slot_cost %}\n";
-              tpl += "{%- else %}{%- set ns2.cur_total = ns2.cur_total + _slot_cost %}{%- endif %}\n";
-              tpl += "{%- endfor %}\n";
-              tpl += "{%- if ns2.cur_day != '' %}{%- set ns2.daily = dict(ns2.daily, **{ns2.cur_day: ns2.cur_total | round(4)}) %}{%- endif %}\n";
-            }
-
-            tpl += "{%- set today = now() | as_timestamp | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- set months = ['January','February','March','April','May','June','July','August','September','October','November','December'] %}\n";
-
-            // HTML table start
-            tpl += '<div style="max-height:570px; overflow-y:auto; position:relative;">\n';
-            tpl += '<table style="border-collapse:collapse; width:100%; font-size:12px;">\n';
-            tpl += '<thead><tr>\n';
-            tpl += '<th style="' + _thStyle + '">Time</th>\n';
-            if (bpEnt) tpl += '<th style="' + _thStyle + '">Buy ' + currency + '</th>\n';
-            if (spEnt) tpl += '<th style="' + _thStyle + '">Sell ' + currency + '</th>\n';
-            if (mpPv) tpl += '<th style="' + _thStyle + '">PV kW</th>\n';
-            if (mpLoad) tpl += '<th style="' + _thStyle + '">Load kW</th>\n';
-            if (mpGrid) tpl += '<th style="' + _thStyle + '">Grid kW</th>\n';
-            if (mpBatt) tpl += '<th style="' + _thStyle + '">Batt kW</th>\n';
-            if (mpSoc) tpl += '<th style="' + _thStyle + '">SoC %</th>\n';
-            if (emHasNet) tpl += '<th style="' + _thStyle + '">Net ' + currency + '</th>\n';
-            tpl += '</tr></thead>\n';
-
-            // TODAY section — fully expanded
-            tpl += '<tbody>\n';
-            tpl += "{%- set _todayHeader = namespace(shown=false) %}\n";
-            tpl += "{%- for row in _iter %}\n";
-            tpl += "{%- set dt = row.date %}\n";
-            tpl += "{%- set ts = dt | as_datetime | as_local | as_timestamp %}\n";
-            tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- if _day == today %}\n";
-            tpl += "{%- set _isNow = (ts | int - now().timestamp() | int) | abs < 900 %}\n";
-            tpl += "{%- if not _todayHeader.shown %}{%- set _todayHeader.shown = true %}\n";
-            if (emHasNet) {
-              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
-              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
-              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
-            }
-            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
-            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
-            tpl += '<tr><td colspan="' + emLeftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
-            if (emHasNet) {
-              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
-            } else {
-              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
-            }
-            tpl += '</tr>\n';
-            tpl += "{%- endif %}\n";
-
-            // Data row
-            tpl += "{%- set t = ts | timestamp_custom('%H:%M') %}\n";
-            tpl += "{%- set _isPast = ts | int < (now().timestamp() | int - 450) %}\n";
-            // Value lookups
-            if (bpEnt) tpl += "{%- set _buy_val = ns.buy.get(dt, 0) | float(0) %}\n";
-            if (spEnt) tpl += "{%- set _sell_val = ns.sell.get(dt, 0) | float(0) %}\n";
-            if (mpGrid) tpl += "{%- set _g = ns.grid.get(dt) %}\n";
-            if (mpSoc) tpl += "{%- set _soc_val = ns.soc.get(dt) | float(50) %}\n";
-            if (emHasNet) {
-              tpl += "{%- set _g_f = ns.grid.get(dt, 0)|float(0) %}\n";
-              tpl += "{%- set _nc = ns.buy.get(dt,0)|float(0) * [_g_f, 0]|max + ns.sell.get(dt,0)|float(0) * [_g_f, 0]|min * -1 * -1 %}\n";
-            }
-
-            // Colors
-            if (bpEnt) tpl += "{%- set _buy_color = '#ff2222' if _buy_val >= 0.50 else '#cc6600' if _buy_val >= 0.40 else '#cccc00' if _buy_val >= 0.30 else '#00e5cc' if _buy_val >= 0.20 else '#888888' %}\n";
-            if (spEnt) tpl += "{%- set _sell_color = '#00ff00' if _sell_val >= 0.25 else '#00cc00' if _sell_val >= 0.10 else '#009900' if _sell_val >= 0.05 else '#336633' if _sell_val >= 0.03 else '#888888' %}\n";
-            if (mpGrid) tpl += "{%- set _g_color = '#ff4444' if (_g|float(0)) > 0 else '#00cc00' if (_g|float(0)) < 0 else '#888888' %}\n";
-            if (mpSoc) tpl += "{%- set _soc_color = '#ff4444' if _soc_val <= 20 else '#00cc00' if _soc_val >= 75 else '' %}\n";
-            if (emHasNet) tpl += "{%- set _nc_color = '#00cc00' if _nc < -0.001 else '#ff4444' if _nc > 0.001 else '' %}\n";
-
-            tpl += "{%- if _isPast %}\n";
-            // Past row — dimmed
-            tpl += '<tr style="opacity:0.4;"><td style="' + _tdStyle + '">{{ t }}</td>';
-            if (bpEnt) tpl += '<td style="' + _tdStyle + '">{{ _buy_val }}</td>';
-            if (spEnt) tpl += '<td style="' + _tdStyle + '">{{ _sell_val }}</td>';
-            if (mpPv) tpl += '<td style="' + _tdStyle + '">{{ ns.pv.get(dt, 0) }}</td>';
-            if (mpLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(dt, \'—\') }}</td>';
-            if (mpGrid) tpl += '<td style="' + _tdStyle + '">{{ _g if _g is not none else \'—\' }}</td>';
-            if (mpBatt) tpl += '<td style="' + _tdStyle + '">{{ ns.batt.get(dt, \'—\') }}</td>';
-            if (mpSoc) tpl += '<td style="' + _tdStyle + '">{{ ns.soc.get(dt, \'—\') }}%</td>';
-            if (emHasNet) tpl += "<td style=\"" + _tdStyle + "\">{{ '%+0.4f' | format(_nc) }}</td>";
-            tpl += '</tr>\n';
-
-            tpl += "{%- else %}\n";
-            // Current/future row — colored
-            tpl += "<tr{{ ' style=font-weight:bold;' if _isNow else '' }}>";
-            tpl += '<td style="' + _tdStyle + '">{{ \'▶ \' + t if _isNow else t }}</td>';
-            if (bpEnt) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _buy_color }};">{{ _buy_val }}</span></td>';
-            if (spEnt) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _sell_color }};">{{ _sell_val }}</span></td>';
-            if (mpPv) tpl += "<td style=\"" + _tdStyle + "\">{%- set _pv = ns.pv.get(dt) %}{{ '<span style=color:#e8a835;>' ~ _pv ~ '</span>' if _pv and _pv != 0 else '0' }}</td>";
-            if (mpLoad) tpl += '<td style="' + _tdStyle + '">{{ ns.load.get(dt, \'—\') }}</td>';
-            if (mpGrid) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _g_color }};">{{ _g if _g is not none else \'—\' }}</span></td>';
-            if (mpBatt) tpl += "<td style=\"" + _tdStyle + "\">{%- set _b = ns.batt.get(dt) %}<span style=\"color:{{ 'green' if (_b|float(0)) > 0 else 'orange' if (_b|float(0)) < 0 else 'grey' }};\">{{ _b if _b is not none else '—' }}</span></td>";
-            if (mpSoc) tpl += '<td style="' + _tdStyle + '"><span style="color:{{ _soc_color }};">{{ ns.soc.get(dt, \'—\') }}%</span></td>';
-            if (emHasNet) tpl += "<td style=\"" + _tdStyle + "\"><span style=\"color:{{ _nc_color }};\">{{ '%+0.4f' | format(_nc) }}</span></td>";
-            tpl += '</tr>\n';
-            tpl += "{%- endif %}\n";
-
-            tpl += "{%- endif %}\n"; // end if _day == today
-            tpl += "{%- endfor %}\n";
-            tpl += '</tbody>\n';
-
-            // UPCOMING DAYS — summary rows only
-            tpl += '<tbody>\n';
-            tpl += '<tr><td colspan="' + emCols + '" style="padding:8px 6px 4px 6px; text-align:left; font-size:11px; color:var(--secondary-text-color); letter-spacing:0.05em; border-top:3px solid var(--divider-color);">UPCOMING DAYS</td></tr>\n';
-            tpl += "{%- set _seenDays = namespace(days=[]) %}\n";
-            tpl += "{%- for row in _iter %}\n";
-            tpl += "{%- set dt = row.date %}\n";
-            tpl += "{%- set ts = dt | as_datetime | as_local | as_timestamp %}\n";
-            tpl += "{%- set _day = ts | timestamp_custom('%Y-%m-%d') %}\n";
-            tpl += "{%- if _day != today and _day not in _seenDays.days %}\n";
-            tpl += "{%- set _seenDays.days = _seenDays.days + [_day] %}\n";
-            if (emHasNet) {
-              tpl += "{%- set _day_total = ns2.daily.get(_day, 0) | float(0) %}\n";
-              tpl += "{%- set _day_color = '#00cc00' if _day_total < 0 else '#ff4444' %}\n";
-              tpl += "{%- set _day_label = 'Daily Total: -" + currency + "' + '%0.2f' | format(_day_total | abs) if _day_total < 0 else 'Daily Total: +" + currency + "' + '%0.2f' | format(_day_total | abs) %}\n";
-            }
-            tpl += "{%- set _month = months[(ts | timestamp_custom('%m') | int) - 1] %}\n";
-            tpl += "{%- set _day_name = '📅 ' + ts | timestamp_custom('%A %d ') + _month %}\n";
-            tpl += '<tr><td colspan="' + emLeftCols + '" style="' + _dayStyle + ' text-align:center;"><span>{{ _day_name }}</span></td>';
-            if (emHasNet) {
-              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;"><span style="color:{{ _day_color }};">{{ _day_label }}</span></td>';
-            } else {
-              tpl += '<td colspan="' + emRightCols + '" style="' + _dayStyle + ' text-align:right;">&nbsp;</td>';
-            }
-            tpl += '</tr>\n';
-            tpl += "{%- endif %}\n";
-            tpl += "{%- endfor %}\n";
-            tpl += '</tbody>\n';
-
-            tpl += '</table></div>\n';
-
-            forecastTableCard = {
-              type: 'custom:html-template-card',
-              ignore_line_breaks: true,
-              content: tpl,
-              card_mod: { style: 'ha-card { background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px !important; }' }
-            };
-          }
+          modalTitle = '📊 EMHASS Forecasts';
+          const emhassConfig = { type: 'custom:emhass-events-card' };
+          if (e.mpc_battery) emhassConfig.p_batt_forecast = e.mpc_battery;
+          if (e.mpc_grid) emhassConfig.p_grid_forecast = e.mpc_grid;
+          if (e.mpc_pv) emhassConfig.p_pv_forecast = e.mpc_pv;
+          if (e.mpc_load) emhassConfig.p_load_forecast = e.mpc_load;
+          if (e.mpc_soc) emhassConfig.soc_forecast = e.mpc_soc;
+          if (e.buy_price || e.current_import_price) emhassConfig.buy_price = e.buy_price || e.current_import_price;
+          if (e.sell_price || e.current_export_price) emhassConfig.sell_price = e.sell_price || e.current_export_price;
+          if (e.mpc_cost_fun) emhassConfig.net_cost = e.mpc_cost_fun;
+          emhassConfig.currency_symbol = cfg.pricing?.currency || '$';
+          innerCard = emhassConfig;
+        } else if (emsP === 'energy_manager') {
+          modalTitle = '📊 Energy Manager';
+          modalIconColor = '#ff9800';
+          innerCard = { type: 'custom:em-events-card', currency_symbol: cfg.pricing?.currency || '$' };
         }
-        // Build toggle + conditional cards if we have a forecast table
-        if (forecastTableCard) {
-          ftToggleCard = {
-            type: 'custom:mushroom-template-card',
-            primary: emsP === 'haeo' ? '📊 HAEO Forecasts' : '📊 EMHASS Forecasts',
-            secondary: "{{ 'Tap to collapse' if is_state('input_boolean.genergy_forecast_table', 'on') else 'Tap to expand' }}",
+        if (innerCard) {
+          forecastModalCard = {
+            type: 'custom:sigenergy-forecast-modal',
+            title: modalTitle,
             icon: 'mdi:table-clock',
-            icon_color: "{{ 'teal' if is_state('input_boolean.genergy_forecast_table', 'on') else 'grey' }}",
-            tap_action: { action: 'call-service', service: 'input_boolean.toggle', service_data: {}, target: { entity_id: 'input_boolean.genergy_forecast_table' } },
-            card_mod: { style: 'ha-card { cursor: pointer; background: ' + _ftBg + ' !important; border: 1px solid ' + _ftBorder + ' !important; border-radius: 12px 12px ' + "{{ '0 0' if is_state('input_boolean.genergy_forecast_table', 'on') else '12px 12px' }}" + ' !important; margin-bottom: 0 !important; padding-bottom: 0 !important; }' }
-          };
-          forecastTableCard.card_mod.style = forecastTableCard.card_mod.style.replace('border-radius: 12px', 'border-radius: 0 0 12px 12px; border-top: none');
-          ftConditionalCard = {
-            type: 'conditional',
-            conditions: [{ entity: 'input_boolean.genergy_forecast_table', state: 'on' }],
-            card: forecastTableCard
+            icon_color: modalIconColor,
+            bg: _ftBg,
+            border: _ftBorder,
+            card: innerCard
           };
         }
       }
-      if (ftToggleCard) houseStack.push(ftToggleCard);
-      if (ftConditionalCard) houseStack.push(ftConditionalCard);
+      if (forecastModalCard) houseStack.push(forecastModalCard);
 
       if (solcastCard) houseStack.push(solcastCard);
       newCards.push({ type: 'vertical-stack', cards: houseStack });
@@ -5561,44 +5308,47 @@ return forecast.map(function(d) {
       const gridImportNode = { entity_id: _gridImportId, name: 'Grid', color: '#6B8FD4', children: gridImportChildren };
       if (_gridImportAdd) gridImportNode.add_entities = _gridImportAdd;
 
+      // Resolve Sankey color theme
+      const _sTheme = SANKEY_THEMES[cfg.display?.sankey_color_theme] || SANKEY_THEMES.modern;
+
       // Build node metadata for the custom energy flow card AND the interactive info panel
       const _sankeyNodes = [];
       // Source nodes
       if (e.solar_energy_today) _sankeyNodes.push({
-        id: 'solar', name: 'Solar', color: '#D4C850', entity_id: e.solar_energy_today, type: 'source',
+        id: 'solar', name: 'Solar', color: _sTheme.solar, entity_id: e.solar_energy_today, type: 'source',
         children: solarChildren.map(x => typeof x === 'string' ? x : x?.entity_id).filter(Boolean), parents: []
       });
       if (e.battery_discharge_today) _sankeyNodes.push({
-        id: 'bat_d', name: 'Battery', color: '#4ECDC4', entity_id: e.battery_discharge_today, type: 'source',
+        id: 'bat_d', name: 'Battery', color: _sTheme.battery, entity_id: e.battery_discharge_today, type: 'source',
         children: battDischargeChildren.map(x => typeof x === 'string' ? x : x?.entity_id).filter(Boolean), parents: []
       });
       if (_gridImportId) _sankeyNodes.push({
-        id: 'grid_i', name: 'Grid', color: '#6B8FD4', entity_id: _gridImportId, type: 'source',
+        id: 'grid_i', name: 'Grid', color: _sTheme.grid_import, entity_id: _gridImportId, type: 'source',
         children: gridImportChildren.map(x => typeof x === 'string' ? x : x?.entity_id).filter(Boolean), parents: []
       });
       // Destination nodes
       if (e.load_energy_today) _sankeyNodes.push({
-        id: 'load', name: 'Home', color: '#9B7AB8', entity_id: e.load_energy_today, type: 'dest',
+        id: 'load', name: 'Home', color: _sTheme.home, entity_id: e.load_energy_today, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
       if (e.battery_charge_today) _sankeyNodes.push({
-        id: 'bat_c', name: 'Battery', color: '#4ECDC4', entity_id: e.battery_charge_today, type: 'dest',
+        id: 'bat_c', name: 'Battery', color: _sTheme.battery, entity_id: e.battery_charge_today, type: 'dest',
         children: [], parents: [e.solar_energy_today, _gridImportId].filter(Boolean)
       });
       if (_gridExportId) _sankeyNodes.push({
-        id: 'grid_e', name: 'Grid', color: '#7B8FD4', entity_id: _gridExportId, type: 'dest',
+        id: 'grid_e', name: 'Grid', color: _sTheme.grid_export, entity_id: _gridExportId, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today].filter(Boolean)
       });
       if (f.show_ev_in_sankey && evSankeyEntity) _sankeyNodes.push({
-        id: 'ev', name: 'EV', color: '#E8705A', entity_id: evSankeyEntity, type: 'dest',
+        id: 'ev', name: 'EV', color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
       if (f.show_hp_in_sankey && hpSankeyEntity) _sankeyNodes.push({
-        id: 'hp', name: 'HP', color: '#E8A799', entity_id: hpSankeyEntity, type: 'dest',
+        id: 'hp', name: 'HP', color: _sTheme.hp, entity_id: hpSankeyEntity, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
       if (f.show_losses_in_sankey) _sankeyNodes.push({
-        id: 'losses', name: 'Losses', color: '#444444', entity_id: '_sankey_losses', type: 'dest',
+        id: 'losses', name: 'Losses', color: _sTheme.losses, entity_id: '_sankey_losses', type: 'dest',
         children: [], parents: []
       });
 
@@ -5615,36 +5365,36 @@ return forecast.map(function(d) {
       const _panelNodes = [];
       // Source nodes
       if (e.solar_energy_today) _panelNodes.push({
-        id: 'solar', name: 'Solar', color: '#D4C850', entity_id: e.solar_energy_today, type: 'source',
+        id: 'solar', name: 'Solar', color: _sTheme.solar, entity_id: e.solar_energy_today, type: 'source',
         children: solarChildren.map(eid => eid), parents: []
       });
       if (e.battery_discharge_today) _panelNodes.push({
-        id: 'bat_d', name: 'Battery Discharged', color: '#4ECDC4', entity_id: e.battery_discharge_today, type: 'source',
+        id: 'bat_d', name: 'Battery Discharged', color: _sTheme.battery, entity_id: e.battery_discharge_today, type: 'source',
         children: battDischargeChildren.map(eid => eid), parents: []
       });
       if (_gridImportId) _panelNodes.push({
-        id: 'grid_i', name: 'Grid Imported', color: '#6B8FD4', entity_id: _gridImportId, type: 'source',
+        id: 'grid_i', name: 'Grid Imported', color: _sTheme.grid_import, entity_id: _gridImportId, type: 'source',
         children: gridImportChildren.map(eid => eid), parents: []
       });
       // Destination nodes
       if (e.load_energy_today) _panelNodes.push({
-        id: 'load', name: 'Home Consumed', color: '#9B7AB8', entity_id: e.load_energy_today, type: 'dest',
+        id: 'load', name: 'Home Consumed', color: _sTheme.home, entity_id: e.load_energy_today, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
       if (e.battery_charge_today) _panelNodes.push({
-        id: 'bat_c', name: 'Battery Charged', color: '#4ECDC4', entity_id: e.battery_charge_today, type: 'dest',
+        id: 'bat_c', name: 'Battery Charged', color: _sTheme.battery, entity_id: e.battery_charge_today, type: 'dest',
         children: [], parents: [e.solar_energy_today, _gridImportId].filter(Boolean)
       });
       if (_gridExportId) _panelNodes.push({
-        id: 'grid_e', name: 'Grid Exported', color: '#7B8FD4', entity_id: _gridExportId, type: 'dest',
+        id: 'grid_e', name: 'Grid Exported', color: _sTheme.grid_export, entity_id: _gridExportId, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today].filter(Boolean)
       });
       if (f.show_ev_in_sankey && evSankeyEntity) _panelNodes.push({
-        id: 'ev', name: 'EV Charger', color: '#E8705A', entity_id: evSankeyEntity, type: 'dest',
+        id: 'ev', name: 'EV Charger', color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
       if (f.show_hp_in_sankey && hpSankeyEntity) _panelNodes.push({
-        id: 'hp', name: 'Heat Pump', color: '#E8A799', entity_id: hpSankeyEntity, type: 'dest',
+        id: 'hp', name: 'Heat Pump', color: _sTheme.hp, entity_id: hpSankeyEntity, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
 
@@ -5808,6 +5558,11 @@ return forecast.map(function(d) {
           <span class="row-state">Name shown on house card</span>
         </div>
         <div class="row">
+          <span class="row-label">Heat Pump Label</span>
+          <input class="row-input" type="text" value="${d.heat_pump_label||''}" data-key="heat_pump_label" placeholder="HEAT PUMP" />
+          <span class="row-state">e.g. HVAC, AirCon</span>
+        </div>
+        <div class="row">
           <span class="row-label">SoC Ring Low</span>
           <input class="row-input" type="number" min="0" max="100" value="${d.soc_ring_low!==undefined?d.soc_ring_low:40}" data-key="soc_ring_low" />
           <span class="row-state">Below: red pulse</span>
@@ -5816,6 +5571,17 @@ return forecast.map(function(d) {
           <span class="row-label">SoC Ring High</span>
           <input class="row-input" type="number" min="0" max="100" value="${d.soc_ring_high!==undefined?d.soc_ring_high:60}" data-key="soc_ring_high" />
           <span class="row-state">Above: green · Between: orange</span>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">Energy Flow (Sankey)</div>
+        <div class="row">
+          <span class="row-label">Color Theme</span>
+          <select class="row-input" data-key="sankey_color_theme">
+            <option value="modern" ${d.sankey_color_theme==='modern'||!d.sankey_color_theme?'selected':''}>Modern (muted)</option>
+            <option value="vibrant" ${d.sankey_color_theme==='vibrant'?'selected':''}>Vibrant (classic)</option>
+          </select>
+          <span class="row-state">${d.sankey_color_theme==='vibrant'?'Bright pastel':'Soft tones'}</span>
         </div>
       </div>
       <div class="section">
@@ -5882,17 +5648,22 @@ return forecast.map(function(d) {
     }
 
     // Input/select changes
-    el.querySelectorAll('.row-input').forEach(input => {
+    const STRING_SELECTS = ['sankey_color_theme'];
+    el.querySelectorAll('.row-input:not(.profile-name)').forEach(input => {
       input.addEventListener('change', () => {
         const cfg2 = this._storeGet();
         const key = input.dataset.key;
-        const val = input.type === 'number' || input.tagName === 'SELECT'
+        const val = input.type === 'number' || (input.tagName === 'SELECT' && !STRING_SELECTS.includes(key))
           ? parseInt(input.value) : input.value;
         cfg2.display[key] = val;
         this._storeSave(cfg2);
         // Sync battery_label directly to house card when changed
         if (key === 'battery_label') {
           this._syncBatteryLabelToDashboard(val);
+        }
+        // Sync heat_pump_label directly to house card when changed
+        if (key === 'heat_pump_label') {
+          this._syncHeatPumpLabelToDashboard(val);
         }
       });
     });
@@ -5995,17 +5766,17 @@ class SigenergyEnergyFlowCard extends HTMLElement {
     if (!eid) return;
     this.shadowRoot.querySelectorAll('.flow-path').forEach(p => {
       const src = p.dataset.src, dst = p.dataset.dst;
-      p.style.fillOpacity = (src === eid || dst === eid) ? '0.8' : '0.12';
+      p.style.fillOpacity = (src === eid || dst === eid) ? '0.9' : '0.12';
     });
     this.shadowRoot.querySelectorAll('.node-bar').forEach(b => {
-      b.style.filter = b.dataset.entityId === eid ? 'brightness(1.15)' : 'brightness(0.7)';
+      b.style.opacity = b.dataset.entityId === eid ? '1' : '0.45';
     });
   }
 
   _handleMouseLeave() {
     if (!this.shadowRoot) return;
     this.shadowRoot.querySelectorAll('.flow-path').forEach(p => { p.style.fillOpacity = ''; });
-    this.shadowRoot.querySelectorAll('.node-bar').forEach(b => { b.style.filter = ''; });
+    this.shadowRoot.querySelectorAll('.node-bar').forEach(b => { b.style.opacity = ''; });
   }
 
   _shouldRerender() {
@@ -6330,6 +6101,7 @@ class SigenergyEnergyFlowCard extends HTMLElement {
           pointer-events: auto;
           cursor: pointer;
           overflow: hidden;
+          transition: opacity 0.3s ease;
         }
 
         /* mySigen-style node panel (full-height bar) */
@@ -6419,12 +6191,12 @@ class SigenergyEnergyFlowCard extends HTMLElement {
             <defs>
               ${gradients.map(g => `
                 <linearGradient id="${g.id}" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stop-color="${g.c1}" stop-opacity="0.75"/>
-                  <stop offset="100%" stop-color="${g.c2}" stop-opacity="0.7"/>
+                  <stop offset="0%" stop-color="${g.c1}" stop-opacity="0.9"/>
+                  <stop offset="100%" stop-color="${g.c2}" stop-opacity="0.85"/>
                 </linearGradient>
               `).join('')}
             </defs>
-            ${[...paths].sort((a, b) => (b.isCrossing ? 1 : 0) - (a.isCrossing ? 1 : 0)).map(p => `<path class="flow-path" d="${p.d}" fill="url(#${p.gradId})" fill-opacity="${p.isCrossing ? 0.35 : 0.65}" data-src="${p.srcEid}" data-dst="${p.dstEid}"/>`).join('\n            ')}
+            ${[...paths].sort((a, b) => (b.isCrossing ? 1 : 0) - (a.isCrossing ? 1 : 0)).map(p => `<path class="flow-path" d="${p.d}" fill="url(#${p.gradId})" fill-opacity="${p.isCrossing ? 0.55 : 0.85}" data-src="${p.srcEid}" data-dst="${p.dstEid}"/>`).join('\n            ')}
           </svg>
           <div class="label-col left">
             ${srcBoxes.map(b => {
@@ -6446,11 +6218,15 @@ class SigenergyEnergyFlowCard extends HTMLElement {
       const eid = box.dataset.entityId;
       box.addEventListener('mouseenter', () => {
         this.shadowRoot.querySelectorAll('.flow-path').forEach(p => {
-          p.style.fillOpacity = (p.dataset.src === eid || p.dataset.dst === eid) ? '0.8' : '0.12';
+          p.style.fillOpacity = (p.dataset.src === eid || p.dataset.dst === eid) ? '0.9' : '0.12';
+        });
+        this.shadowRoot.querySelectorAll('.node-bar').forEach(b => {
+          b.style.opacity = b.dataset.entityId === eid ? '1' : '0.45';
         });
       });
       box.addEventListener('mouseleave', () => {
         this.shadowRoot.querySelectorAll('.flow-path').forEach(p => { p.style.fillOpacity = ''; });
+        this.shadowRoot.querySelectorAll('.node-bar').forEach(b => { b.style.opacity = ''; });
       });
     });
   }
@@ -7387,7 +7163,7 @@ class SigenergySankeyPanel extends HTMLElement {
 
 // ═══════════════════════════════════════════════════════════
 // Lottie Insights Card — Animated system health overview
-// Uses lottie-web from CDN for lightweight Lottie JSON rendering
+// Uses local lottie-web with CDN fallback
 // ═══════════════════════════════════════════════════════════
 
 const _LOTTIE_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js';
@@ -7396,11 +7172,21 @@ let _lottiePromise = null;
 function _loadLottie() {
   if (window.lottie) return Promise.resolve(window.lottie);
   if (_lottiePromise) return _lottiePromise;
+  // Resolve local path: JS served from /genergy_dashboard/js/, lottie at /genergy_dashboard/frontend/
+  const localUrl = (import.meta.url || '').replace('/js/', '/frontend/').replace(/\/[^/]+$/, '/lottie.min.js');
   _lottiePromise = new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = _LOTTIE_CDN;
+    s.src = localUrl;
     s.onload = () => resolve(window.lottie);
-    s.onerror = () => reject(new Error('Failed to load lottie-web'));
+    s.onerror = () => {
+      // Fallback to CDN if local fails
+      console.warn('Genergy: local lottie-web failed, falling back to CDN');
+      const s2 = document.createElement('script');
+      s2.src = _LOTTIE_CDN;
+      s2.onload = () => resolve(window.lottie);
+      s2.onerror = () => reject(new Error('Failed to load lottie-web from both local and CDN'));
+      document.head.appendChild(s2);
+    };
     document.head.appendChild(s);
   });
   return _lottiePromise;
@@ -7561,17 +7347,25 @@ class SigenergyInsightsCard extends HTMLElement {
       title: 'Revenue',
       icon: '💰',
       getValue: () => {
+        const cur = cfg.pricing?.currency || '€';
         const savings = this._getVal(ents.emhass_savings_today);
         const cost = this._getVal(ents.emhass_net_cost_today);
+        // Fallback to HA Energy Dashboard cost entities
+        const importCost = savings === null && cost === null ? this._getVal('sensor.imported_energy_total_cost') : null;
+        const exportComp = savings === null && cost === null ? this._getVal('sensor.exported_energy_total_compensation') : null;
         const parts = [];
-        if (savings !== null) parts.push(`Saved: €${savings.toFixed(2)}`);
-        if (cost !== null) parts.push(`Cost: €${cost.toFixed(2)}`);
+        if (savings !== null) parts.push(`Saved: ${cur}${savings.toFixed(2)}`);
+        if (cost !== null) parts.push(`Cost: ${cur}${cost.toFixed(2)}`);
+        if (importCost !== null) parts.push(`Import: ${cur}${importCost.toFixed(2)}`);
+        if (exportComp !== null) parts.push(`Export: ${cur}${exportComp.toFixed(2)}`);
         return parts.length ? parts.join(' · ') : 'No data';
       },
       getStatus: () => {
         const savings = this._getVal(ents.emhass_savings_today);
-        if (savings === null) return 'unknown';
-        if (savings > 0) return 'good';
+        const exportComp = savings === null ? this._getVal('sensor.exported_energy_total_compensation') : null;
+        const v = savings ?? exportComp;
+        if (v === null) return 'unknown';
+        if (v > 0) return 'good';
         return 'warning';
       }
     });
@@ -7832,6 +7626,7 @@ class SigenergyInsightsCard extends HTMLElement {
 
   async _loadAnimations(tiles) {
     const lottiePath = _SIGENERGY_SCRIPT_DIR + 'images/lottie/';
+    const isDark = (window._sigenergyResolveTheme ? window._sigenergyResolveTheme(this._hass) : 'dark') === 'dark';
 
     // Load lottie-web and initialize animations
     try {
@@ -7844,7 +7639,10 @@ class SigenergyInsightsCard extends HTMLElement {
         if (!container) continue;
 
         try {
-          const resp = await fetch(lottiePath + tile.lottie);
+          // Use light theme Lottie variants when in light mode
+          const lottieFile = !isDark ? tile.lottie.replace('.json', '_light.json') : tile.lottie;
+          let resp = await fetch(lottiePath + lottieFile);
+          if (!resp.ok) resp = await fetch(lottiePath + tile.lottie);
           if (!resp.ok) continue;
           const animData = await resp.json();
 
@@ -7857,7 +7655,8 @@ class SigenergyInsightsCard extends HTMLElement {
           });
           this._animations.push(anim);
         } catch(e) {
-          container.innerHTML = `<div class="fallback-icon">${tile.icon}</div>`;
+          const pngPath = _SIGENERGY_SCRIPT_DIR + 'images/care_' + tile.id + '.png';
+          container.innerHTML = `<img src="${pngPath}" style="width:80px;height:80px;object-fit:contain;" onerror="this.outerHTML='<div class=fallback-icon>${tile.icon}</div>'">`;
         }
       }
     } catch(e) {
@@ -7865,7 +7664,8 @@ class SigenergyInsightsCard extends HTMLElement {
       for (const tile of tiles) {
         const container = this.shadowRoot.getElementById('lottie-' + tile.id);
         if (container) {
-          container.innerHTML = `<div class="fallback-icon">${tile.icon}</div>`;
+          const pngPath = _SIGENERGY_SCRIPT_DIR + 'images/care_' + tile.id + '.png';
+          container.innerHTML = `<img src="${pngPath}" style="width:80px;height:80px;object-fit:contain;" onerror="this.outerHTML='<div class=fallback-icon>${tile.icon}</div>'">`;
         }
       }
     }
@@ -7966,8 +7766,8 @@ class SigenergyInsightsCard extends HTMLElement {
     const ents = cfg.entities || {};
     const rows = [];
 
-    const addRow = (label, entityId, unit, decimals) => {
-      const v = this._getVal(entityId);
+    const addRow = (label, entityId, unit, decimals, useKWhConvert) => {
+      const v = useKWhConvert ? this._getValKWh(entityId) : this._getVal(entityId);
       if (v !== null) rows.push({ label, value: v.toFixed(decimals ?? 1) + (unit || '') });
     };
 
@@ -7991,9 +7791,9 @@ class SigenergyInsightsCard extends HTMLElement {
         addRow('Discharge Power', ents.battery_discharge_power, ' W', 0);
         break;
       case 'environmental':
-        addRow('Solar Today', ents.solar_energy_today, ' kWh', 1);
-        addRow('Grid Export', ents.grid_export_today, ' kWh', 1);
-        addRow('Grid Import', ents.grid_import_today, ' kWh', 1);
+        addRow('Solar Today', ents.solar_energy_today, ' kWh', 1, true);
+        addRow('Grid Export', ents.grid_export_today, ' kWh', 1, true);
+        addRow('Grid Import', ents.grid_import_today, ' kWh', 1, true);
         addRow('Self-Sufficiency', ents.self_sufficiency, '%', 0);
         addRow('Solar Power Now', ents.solar_power, ' W', 0);
         break;
@@ -8006,15 +7806,17 @@ class SigenergyInsightsCard extends HTMLElement {
         addRow('Voltage', ents.grid_voltage, ' V', 1);
         addRow('Frequency', ents.grid_frequency, ' Hz', 2);
         addRow('Grid Power', ents.grid_active_power || ents.grid_power, ' W', 0);
-        addRow('Import Today', ents.grid_import_today, ' kWh', 1);
-        addRow('Export Today', ents.grid_export_today, ' kWh', 1);
+        addRow('Import Today', ents.grid_import_today, ' kWh', 1, true);
+        addRow('Export Today', ents.grid_export_today, ' kWh', 1, true);
         break;
-      case 'revenue':
-        addRow('Savings Today', ents.emhass_savings_today, ' €', 2);
-        addRow('Net Cost', ents.emhass_net_cost_today, ' €', 2);
-        addRow('Import Cost', ents.grid_import_cost_today, ' €', 2);
-        addRow('Export Revenue', ents.grid_export_revenue_today, ' €', 2);
+      case 'revenue': {
+        const cur = ' ' + (cfg.pricing?.currency || '€');
+        addRow('Savings Today', ents.emhass_savings_today, cur, 2);
+        addRow('Net Cost', ents.emhass_net_cost_today, cur, 2);
+        addRow('Import Cost', ents.grid_import_cost_today || 'sensor.imported_energy_total_cost', cur, 2);
+        addRow('Export Revenue', ents.grid_export_revenue_today || 'sensor.exported_energy_total_compensation', cur, 2);
         break;
+      }
     }
 
     if (rows.length === 0) {
@@ -8605,6 +8407,181 @@ class SigenergyDeviceCard extends HTMLElement {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Forecast Modal — fullscreen overlay for EMS forecast cards
+// Shows compact trigger bar on dashboard; opens modal on tap
+// ═══════════════════════════════════════════════════════════
+
+class SigForecastModal extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._config = {};
+    this._innerCard = null;
+    this._open = false;
+    this._boundKeyHandler = this._onKeyDown.bind(this);
+  }
+
+  setConfig(config) {
+    if (!config.card) throw new Error('SigForecastModal requires a "card" config');
+    this._config = config;
+    if (this.shadowRoot) this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._innerCard) this._innerCard.hass = hass;
+  }
+
+  getCardSize() { return 1; }
+
+  connectedCallback() { this._render(); }
+
+  _render() {
+    const c = this._config;
+    const title = c.title || 'Forecasts';
+    const icon = c.icon || 'mdi:table-clock';
+    const iconColor = c.icon_color || 'teal';
+    const bgColor = c.bg || 'rgba(30,35,54,0.94)';
+    const borderColor = c.border || '#2d3451';
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: block; }
+        .trigger {
+          display: flex; align-items: center; gap: 12px;
+          padding: 12px 16px; cursor: pointer;
+          background: ${bgColor}; border: 1px solid ${borderColor};
+          border-radius: 12px; color: var(--primary-text-color, #e0e4ec);
+          transition: background 0.2s, border-color 0.2s;
+          user-select: none; -webkit-user-select: none;
+        }
+        .trigger:hover { border-color: ${iconColor}; }
+        .trigger:active { transform: scale(0.99); }
+        .trigger-icon { color: ${iconColor}; flex-shrink: 0; --mdc-icon-size: 24px; }
+        .trigger-text { flex: 1; font-size: 14px; font-weight: 500; }
+        .trigger-hint { font-size: 12px; opacity: 0.5; flex-shrink: 0; }
+        .trigger-arrow { opacity: 0.4; --mdc-icon-size: 20px; }
+
+        .overlay {
+          position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+          z-index: 999; display: none;
+          background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+          align-items: center; justify-content: center;
+          animation: fadeIn 0.2s ease;
+        }
+        .overlay.active { display: flex; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        .modal {
+          background: ${bgColor}; border: 1px solid ${borderColor};
+          border-radius: 16px; width: 95vw; max-width: 1200px;
+          max-height: 92vh; display: flex; flex-direction: column;
+          box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+          animation: slideUp 0.25s ease;
+          overflow: hidden;
+        }
+        .modal-header {
+          display: flex; align-items: center; gap: 12px;
+          padding: 16px 20px; border-bottom: 1px solid ${borderColor};
+          flex-shrink: 0;
+        }
+        .modal-title-icon { color: ${iconColor}; --mdc-icon-size: 24px; }
+        .modal-title { flex: 1; font-size: 18px; font-weight: 600; color: var(--primary-text-color, #e0e4ec); }
+        .modal-close {
+          background: none; border: 1px solid ${borderColor}; border-radius: 8px;
+          color: var(--primary-text-color, #e0e4ec); cursor: pointer;
+          width: 36px; height: 36px; display: flex; align-items: center;
+          justify-content: center; font-size: 18px; transition: background 0.15s;
+          flex-shrink: 0;
+        }
+        .modal-close:hover { background: rgba(255,255,255,0.1); }
+        .modal-body {
+          flex: 1; overflow-y: auto; padding: 0;
+          -webkit-overflow-scrolling: touch;
+        }
+        .modal-body > * {
+          --ha-card-background: transparent !important;
+          --card-background-color: transparent !important;
+        }
+
+        @media (max-width: 768px) {
+          .modal { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
+          .trigger-hint { display: none; }
+        }
+      </style>
+
+      <div class="trigger" id="trigger">
+        <ha-icon class="trigger-icon" icon="${icon}"></ha-icon>
+        <span class="trigger-text">${title}</span>
+        <span class="trigger-hint">Tap to open</span>
+        <ha-icon class="trigger-arrow" icon="mdi:arrow-expand"></ha-icon>
+      </div>
+
+      <div class="overlay" id="overlay">
+        <div class="modal" id="modal">
+          <div class="modal-header">
+            <ha-icon class="modal-title-icon" icon="${icon}"></ha-icon>
+            <span class="modal-title">${title}</span>
+            <button class="modal-close" id="closeBtn" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body" id="modalBody"></div>
+        </div>
+      </div>
+    `;
+
+    this.shadowRoot.getElementById('trigger').addEventListener('click', () => this._openModal());
+    this.shadowRoot.getElementById('closeBtn').addEventListener('click', () => this._closeModal());
+    this.shadowRoot.getElementById('overlay').addEventListener('click', (e) => {
+      if (e.target === this.shadowRoot.getElementById('overlay')) this._closeModal();
+    });
+    // Stop modal clicks from propagating to overlay backdrop
+    this.shadowRoot.getElementById('modal').addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  _openModal() {
+    const overlay = this.shadowRoot.getElementById('overlay');
+    overlay.classList.add('active');
+    this._open = true;
+    document.addEventListener('keydown', this._boundKeyHandler);
+
+    if (!this._innerCard) {
+      const body = this.shadowRoot.getElementById('modalBody');
+      const cardConfig = Object.assign({}, this._config.card);
+      // Remove card_mod — we style the modal ourselves
+      delete cardConfig.card_mod;
+      const tag = cardConfig.type.startsWith('custom:') ? cardConfig.type.slice(7) : 'hui-' + cardConfig.type + '-card';
+      try {
+        this._innerCard = document.createElement(tag);
+        this._innerCard.setConfig(cardConfig);
+        if (this._hass) this._innerCard.hass = this._hass;
+        body.appendChild(this._innerCard);
+      } catch (err) {
+        body.innerHTML = '<div style="padding:20px;color:#e57373;">Failed to load card: ' + err.message + '</div>';
+      }
+    }
+  }
+
+  _closeModal() {
+    this.shadowRoot.getElementById('overlay').classList.remove('active');
+    this._open = false;
+    document.removeEventListener('keydown', this._boundKeyHandler);
+  }
+
+  _onKeyDown(e) {
+    if (e.key === 'Escape' && this._open) {
+      e.preventDefault();
+      this._closeModal();
+    }
+  }
+
+  disconnectedCallback() {
+    document.removeEventListener('keydown', this._boundKeyHandler);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 // Robust Element Registration — belt-and-suspenders approach
 // Handles ES module caching, race conditions, and timing issues
 // ═══════════════════════════════════════════════════════════
@@ -8616,6 +8593,7 @@ window.__sigCardClasses['sigenergy-device-card'] = SigenergyDeviceCard;
 window.__sigCardClasses['sigenergy-sankey-panel'] = SigenergySankeyPanel;
 window.__sigCardClasses['sigenergy-insights-card'] = SigenergyInsightsCard;
 window.__sigCardClasses['sigenergy-energy-flow-card'] = SigenergyEnergyFlowCard;
+window.__sigCardClasses['sigenergy-forecast-modal'] = SigForecastModal;
 
 // Core registration function — safe to call repeatedly
 function _sigRegisterAll() {

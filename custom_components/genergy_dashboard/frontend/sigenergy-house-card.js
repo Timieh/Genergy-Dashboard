@@ -984,6 +984,8 @@ class SigenergyHouseCard extends LitElement {
     let primary = "";
     let secondary = key === "battery" && this._config.battery_label
       ? this._config.battery_label
+      : key === "heatpump" && this._config.heat_pump_label
+      ? this._config.heat_pump_label
       : def.label;
     let statusLine = "";
     let runtimeLine = "";

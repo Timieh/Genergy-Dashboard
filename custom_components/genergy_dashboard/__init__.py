@@ -93,6 +93,28 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             digest = hashlib.md5(js_bytes).hexdigest()[:8]  # noqa: S324
             cache_buster = f"?v={digest}.{boot_ts}"
         add_extra_js_url(hass, f"/{DOMAIN}/js/sigenergy-dashboard.js{cache_buster}")
+
+        # Register HAEO Events Card if present
+        haeo_path = frontend_dir / "haeo-events-card.js"
+        if await hass.async_add_executor_job(haeo_path.exists):
+            haeo_bytes = await hass.async_add_executor_job(haeo_path.read_bytes)
+            haeo_digest = hashlib.md5(haeo_bytes).hexdigest()[:8]  # noqa: S324
+            add_extra_js_url(hass, f"/{DOMAIN}/js/haeo-events-card.js?v={haeo_digest}.{boot_ts}")
+
+        # Register EMHASS Events Card if present
+        emhass_ec_path = frontend_dir / "emhass-events-card.js"
+        if await hass.async_add_executor_job(emhass_ec_path.exists):
+            emhass_ec_bytes = await hass.async_add_executor_job(emhass_ec_path.read_bytes)
+            emhass_ec_digest = hashlib.md5(emhass_ec_bytes).hexdigest()[:8]  # noqa: S324
+            add_extra_js_url(hass, f"/{DOMAIN}/js/emhass-events-card.js?v={emhass_ec_digest}.{boot_ts}")
+
+        # Register Energy Manager Events Card if present
+        em_ec_path = frontend_dir / "em-events-card.js"
+        if await hass.async_add_executor_job(em_ec_path.exists):
+            em_ec_bytes = await hass.async_add_executor_job(em_ec_path.read_bytes)
+            em_ec_digest = hashlib.md5(em_ec_bytes).hexdigest()[:8]  # noqa: S324
+            add_extra_js_url(hass, f"/{DOMAIN}/js/em-events-card.js?v={em_ec_digest}.{boot_ts}")
+
         _LOGGER.info("Genergy Dashboard: JS resources registered")
 
     return True

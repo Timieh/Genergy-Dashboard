@@ -2,6 +2,41 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.21.0-pre.1] - 2025-06-22
+
+### Added — V2 Event Cards (by Roving-Ronin)
+- **HAEO Events Card V2** — Integrated the [HAEO Events Card](https://github.com/Roving-Ronin/myHomeAssistant) by [@Roving-Ronin](https://github.com/Roving-Ronin). Replaces the Jinja2 html-template-card for HAEO users with a native custom element featuring two tabs: "Future Decisions" (forecast-based event classification with 16 color-coded scenarios) and "Past Events" (historical kWh deltas via HA history API). Includes status bar with live SoC, buy/sell prices, and grid timing predictions
+- **EMHASS Events Card V2** — Integrated the EMHASS Events Card by [@Roving-Ronin](https://github.com/Roving-Ronin). Three-tier sensor fallback (card YAML → MPC sensors → standard EMHASS sensors), per-slot cost calculation from forecast data (grid power × price × step duration), daily cost totals, and 16 color-coded event scenarios
+- **Energy Manager Events Card V2** — Integrated the Energy Manager Events Card by [@Roving-Ronin](https://github.com/Roving-Ronin) for Node-RED Energy Manager users. Same V2 feature set adapted for `sensor.energy_manager_plan` and `sensor.energy_manager_decision` entities
+- **Entity Auto-Mapping** — All three V2 event cards automatically map entities from the Genergy config store to the card's entity config keys
+
+### Added — Forecast Modal Overlay
+- **SigForecastModal** — New `sigenergy-forecast-modal` custom element replaces the old toggle + conditional card pattern for forecast tables. Compact trigger bar on the dashboard opens a fullscreen modal overlay (position: fixed, z-index: 999, backdrop blur) with the V2 event card inside. Close via ✕ button, backdrop click, or Escape key. Mobile-responsive (100vw × 100vh on small screens). Lazy card creation on first open for better page load performance
+- **No More `input_boolean` Dependency** — Removed the `input_boolean.genergy_forecast_table` toggle requirement. Single card replaces two (toggle + conditional)
+
+### Added — Energy Manager Provider
+- **4th EMS Provider Option** — Added "Energy Manager" as a fourth EMS provider alongside None, EMHASS, and HAEO. Auto-detects `sensor.energy_manager_decision` and `sensor.energy_manager_plan` entities. Includes dedicated entity configuration section in Settings with links to the Energy Manager GitHub repository
+
+### Added — Currency Symbol Support
+- **Settings-Driven Currency** — All three V2 event cards now read `currency_symbol` from their config (passed from `cfg.pricing.currency` via the dashboard builder). Replaces hardcoded `$` with the user's configured currency symbol in all cost columns, daily totals, and price headers
+
+### Added — Smart Load Types
+- **Shelly Device** — New smart load type with keyword matching for Shelly-based devices
+- **Generator** — New smart load type with multilingual keyword support (generator, genset, aggregaat, groupe electrogene, etc.)
+- **Circuit Breaker** — New smart load type with keywords for circuit breakers, RCBOs, MCBs, switchboards, and distribution boards (multilingual)
+
+### Changed — V2 Card UX Improvements
+- **Collapsible Legend** — Changed V2 event card legends from always-visible `<div>` to collapsible `<details>` elements. Start collapsed to save space; click "📘 Legend" to expand
+- **Tightened Table Layout** — Reduced column widths (Event 40%→30%, Buy/Sell 68→62px, data cols 44–46→40–44px), font size (12→11px), and cell padding (4px 6px→3px 4px) with overflow:hidden + text-overflow:ellipsis to prevent table overflow on narrow screens
+
+### Changed — Local Lottie Animations
+- **CDN Independence** — Downloaded `lottie.min.js` locally. The `_loadLottie()` function now tries the local path first (derived from `import.meta.url`), falling back to the CDN only on error. Removes dependency on the Sigenergy CDN for animated icons
+
+### Fixed
+- **Heat Pump Label** — House card now respects `heat_pump_label` config for the heat pump tile (was only reading `battery_label` for battery)
+- **Smart Load Empty State** — Smart load card no longer clears rendered content when load list temporarily becomes empty (keeps last known state visible)
+- **V2 Card Registration** — `__init__.py` now registers all three V2 event card JS files (`haeo-events-card.js`, `emhass-events-card.js`, `em-events-card.js`) with MD5 hash-based cache busting
+
 ## [2.20.1] - 2025-04-09
 
 ### Fixed — Smart Load Persistence (Critical)

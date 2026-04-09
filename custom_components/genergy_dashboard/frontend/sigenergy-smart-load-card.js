@@ -30,6 +30,9 @@ const APPLIANCE_TYPES = [
   { id: 'tv',                  label: 'TV',                keywords: ['tv', 'television', 'televisie', 'fernseher', 'televisor', 'televisore'] },
   { id: 'washing_machine',     label: 'Washing Machine',   keywords: ['wash', 'wasmachine', 'lave.linge', 'waschmaschine', 'lavadora', 'lavatrice'] },
   { id: 'wine_cooler',         label: 'Wine Cooler',       keywords: ['wine', 'wijn', 'vin', 'wein', 'vino'] },
+  { id: 'general_shelly',      label: 'Shelly Device',     keywords: ['shelly'] },
+  { id: 'generator',           label: 'Generator',         keywords: ['generator', 'genset', 'aggregaat', 'groupe.electrogene', 'stromerzeuger', 'generador', 'generatore'] },
+  { id: 'circuit_breaker',     label: 'Circuit Breaker',   keywords: ['circuit', 'breaker', 'rcbo', 'rcd', 'mcb', 'switchboard', 'schakelaar', 'disjoncteur', 'sicherung', 'interruptor', 'interruttore', 'distribution.board', 'verdeelkast', 'tableau.electrique', 'sicherungskasten'] },
 ];
 
 // Image base path — relies on HA static path registered by __init__.py
@@ -196,7 +199,11 @@ class SigenergySmartLoadCard extends HTMLElement {
     const hass = this._hass;
 
     if (!loads.length) {
-      this.shadowRoot.innerHTML = '';
+      // Don't clear existing rendered content — keeps last known state visible
+      // Only clear if we've never rendered anything
+      if (!this._rendered) {
+        this.shadowRoot.innerHTML = '';
+      }
       return;
     }
 
