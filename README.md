@@ -1,6 +1,7 @@
 # Genergy  Dashboard — Sigenergy Inspired Dashboard
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/E1E11XMSKL)
 
 <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=SpengeSec&repository=Genergy-Dashboard&category=integration" target="_blank" rel="noopener"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open your Home Assistant instance and open a repository inside the Home Assistant Community Store." /></a>
 
